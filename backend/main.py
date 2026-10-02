@@ -8,8 +8,9 @@ from app.db import AsyncSessionLocal
 from app.models import Upload
 from app.schemas import UploadResponse
 from app.storage import save_audio
-
-
+from app.schemas import UploadResponse, UploadDetail
+from app.config import BACKEND_DIR, settings
+from app.gnani import transcribe_audio
 app = FastAPI(title="Audio Notes API")
 
 
@@ -59,3 +60,70 @@ async def create_upload(
         id=upload.id,
         status=upload.status,
     )
+
+@app.get("/uploads/{upload_id}", response_model=UploadDetail)
+async def get_upload(
+    upload_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Retrieve a recording's metadata and available transcript."""
+
+    # Look up the recording using its primary key.
+    upload = await db.get(Upload, upload_id)
+
+    if upload is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Upload not found",
+        )
+
+    # Read the database object's attributes into our public response schema.
+    return UploadDetail.model_validate(upload)
+
+@app.post("/uploads/{upload_id}/transcribe", response_model=UploadDetail)
+async def transcribe_upload(
+    upload_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Transcribe a saved recording and persist its text."""
+
+    upload = await db.get(Upload, upload_id)
+
+    if upload is None:
+        raise HTTPException(404, "Upload not found")
+
+    # Reuse a finished transcript instead of paying to transcribe again.
+    if upload.status == "completed" and upload.transcript:
+        return UploadDetail.model_validate(upload)
+
+    if upload.status == "transcribing":
+        raise HTTPException(409, "Recording is already being transcribed")
+
+    # Locate the audio using the same storage root as save_audio.
+    storage_dir = Path(settings.STORAGE_DIR)
+    if not storage_dir.is_absolute():
+        storage_dir = BACKEND_DIR / storage_dir
+
+    audio_path = storage_dir / upload.storage_key
+
+    if not audio_path.is_file():
+        raise HTTPException(404, "Stored audio file not found")
+
+    # Persist the state before waiting for the remote provider.
+    upload.status = "transcribing"
+    await db.commit()
+
+    try:
+        transcript = await transcribe_audio(str(audio_path))
+    except Exception:
+        upload.status = "failed"
+        await db.commit()
+        raise HTTPException(502, "Transcription failed")
+
+    upload.transcript = transcript
+    upload.status = "completed"
+    await db.commit()
+
+    return UploadDetail.model_validate(upload)
+
+
