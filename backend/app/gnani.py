@@ -3,6 +3,9 @@ import mimetypes
 from pathlib import Path
 import asyncio
 import httpx
+import shutil
+
+from app.audio import prepare_audio
 
 from app.config import settings
 
@@ -132,12 +135,28 @@ async def fetch_transcript(job_id: str) -> str:
         return transcript
 
 async def transcribe_audio(audio_path: str) -> str:
-    """Submit a recording, wait for processing, and return its transcript."""
+    """Prepare audio, transcribe its chunks, and combine their text."""
 
-    job_id = await create_job(audio_path)
+    directory, chunks = await prepare_audio(audio_path)
 
-    await start_job(job_id)
+    try:
+        transcripts = []
 
-    await wait_for_completion(job_id)
+        # Process chunks sequentially to preserve recording order.
+        for chunk_path in chunks:
+            job_id = await create_job(chunk_path)
+            await start_job(job_id)
+            await wait_for_completion(job_id)
 
-    return await fetch_transcript(job_id)
+            text = await fetch_transcript(job_id)
+            transcripts.append(text)
+
+        return "\n".join(transcripts)
+
+    finally:
+        # Remove temporary chunks even if transcription fails.
+        await asyncio.to_thread(
+            shutil.rmtree,
+            directory,
+            ignore_errors=True,
+        )

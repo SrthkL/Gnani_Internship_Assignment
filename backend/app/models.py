@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, Text, func
+from sqlalchemy import DateTime, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -22,6 +22,9 @@ class Upload(Base):
         default="queued",
         nullable=False,
     )
+
+    # The existing uploads table requires progress on every inserted row.
+    progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     transcript: Mapped[str | None] = mapped_column(
         Text,

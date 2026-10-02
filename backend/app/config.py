@@ -9,6 +9,7 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 class Settings(BaseSettings):
     DATABASE_URL: str
     STORAGE_DIR: str = str(BACKEND_DIR / "storage")
+    AUDIO_CHUNK_SECONDS: int = 240
 
     model_config = SettingsConfigDict(
         env_file=BACKEND_DIR / ".env",
