@@ -1,107 +1,107 @@
-# Audio Notes Architecture
+# Sonora Architecture
 
-Audio Notes converts a recording into a transcript and a concise summary.
-Railway hosts the Next.js frontend, FastAPI backend, and PostgreSQL database.
-The backend uses Gnani for speech recognition and Groq for summarization.
+Sonora turns audio into transcripts and summaries. Railway hosts the Next.js frontend, FastAPI backend, and PostgreSQL. Gnani transcribes speech; Groq summarizes the resulting text.
+
+**Live app:** [sonora-notes.up.railway.app](https://sonora-notes.up.railway.app/)
 
 ## System overview
 
 ```mermaid
-%%{init: {'themeVariables': {'fontSize': '12px'}, 'flowchart': {'nodeSpacing': 16, 'rankSpacing': 24, 'padding': 6}}}%%
+%%{init: {'themeVariables': {'fontSize': '12px'}, 'flowchart': {'nodeSpacing': 14, 'rankSpacing': 22, 'padding': 6}}}%%
 flowchart LR
-    Browser["Browser"] -.->|HTTPS| UI
-    subgraph Railway["Railway"]
-        UI["Next.js"] <--> API["FastAPI"]
-        API <--> DB[("PostgreSQL")]
-        API -->|Files| Storage[("Audio volume")]
-    end
-    API <-->|"Audio / transcript"| Gnani["Gnani"]
-    API <-->|"Transcript / summary"| Groq["Groq"]
+    U["Browser"] -->|HTTPS| UI["Next.js"]
+    UI -->|"Private /api proxy"| API["FastAPI"]
+    API -->|"Audio chunks"| STT["Gnani"]
+    STT -->|Transcript| API
+    API -->|Transcript| LLM["Groq"]
+    LLM -->|Summary| API
+    API --- DB[("PostgreSQL")]
+    API --- V[("Audio volume")]
+    UI -.->|"Sign-in redirect"| G["Google OAuth"]
+    G -.->|"Callback via Next.js"| API
 
     classDef app fill:#eff6ff,stroke:#2563eb,color:#172554;
     classDef data fill:#f0fdf4,stroke:#16a34a,color:#14532d;
     classDef provider fill:#faf5ff,stroke:#9333ea,color:#581c87;
     class UI,API app;
-    class DB,Storage data;
-    class Gnani,Groq provider;
+    class DB,V data;
+    class STT,LLM,G provider;
 ```
 
-The **frontend** lets the user upload audio, start processing, reopen recordings,
-and read or download results. Requests to `/api/*` pass through Next.js to the
-backend using Railway's private network.
+**Next.js** provides uploads, chunk progress, private history, and result exports. Its `/api/*` rewrites forward requests to FastAPI through Railway's private network. The browser uses one public origin; provider credentials stay in the backend.
 
-The **backend** validates uploads, stores recordings, prepares audio, calls the
-providers, and saves each processing stage. API keys stay in backend environment
-variables.
+**FastAPI** owns authentication, validation, file storage, processing, and result access. Gnani's transcript returns to FastAPI before it is sent to Groq; the providers do not communicate directly. Groq runs `openai/gpt-oss-20b` through an OpenAI-compatible API.
 
-**PostgreSQL** holds recording IDs, filenames, storage paths, status, transcript,
-summary, and error information. The **audio volume** holds the original files
-under `/data/audio/`. PostgreSQL also has its own persistent volume.
+**PostgreSQL** stores users, hashed browser sessions, and account-owned recordings. The **audio volume** stores signed-in users' original audio under `/data/audio/`; it is storage attached to FastAPI, not another API endpoint. PostgreSQL has its own persistent volume.
 
-**Gnani** receives audio and returns transcript text. **Groq** receives that
-transcript and returns a summary using `openai/gpt-oss-20b`. The model runs at
-Groq; Railway runs the application services.
-
-## Processing a recording
+## Recording flow
 
 ```mermaid
-%%{init: {'themeVariables': {'fontSize': '13px'}, 'sequence': {'width': 70, 'height': 28, 'actorMargin': 20, 'diagramMarginX': 8, 'diagramMarginY': 8, 'messageMargin': 18, 'mirrorActors': false}}}%%
-sequenceDiagram
-    participant UI as Frontend
-    participant API as FastAPI
-    participant STT as Gnani
-    participant LLM as Groq
-
-    UI->>API: Upload audio
-    API-->>UI: Recording ID
-    UI->>API: Start processing
-    API-->>UI: Accepted
-    API->>STT: Submit audio chunks
-    STT-->>API: Transcripts
-    API->>LLM: Saved transcript
-    LLM-->>API: Summary
-    UI->>API: Poll result
-    API-->>UI: Transcript + summary
+%%{init: {'themeVariables': {'fontSize': '12px'}, 'flowchart': {'nodeSpacing': 14, 'rankSpacing': 20, 'padding': 6}}}%%
+flowchart LR
+    A["Upload"] --> B["Validate & store"]
+    B --> C["Start processing"]
+    C --> D["FFmpeg chunks"]
+    D --> E["Gnani transcripts"]
+    E --> F["Combine text"]
+    F --> G["Groq summary"]
+    G --> H["Display & export"]
 ```
 
-Uploading and processing are separate operations. Signed-in uploads save the
-original file and an account-owned database record. Guests use temporary files
-and keep results only in server memory; their transcripts are never stored in PostgreSQL. A second
-request starts a background task, allowing the API to respond while the
-recording is processed. The frontend polls the API for updates.
+1. **Upload:** `POST /uploads` accepts WAV, MP3, M4A, FLAC, or OGG files up to 50 MiB. It returns a recording ID with status `uploaded`. Signed-in recordings go to persistent storage; guest recordings go to temporary directories.
+2. **Start:** `POST /uploads/{id}/transcribe` reserves the recording and returns `202`. A FastAPI background task then processes it inside the same backend process. Concurrent starts are rejected; completed results can be returned without rerunning providers.
+3. **Transcribe:** FFmpeg normalizes audio to mono, 16 kHz PCM WAV and splits it into ordered chunks. `AUDIO_CHUNK_SECONDS` defaults to 240 and accepts 1–240 seconds. Gnani processes each chunk sequentially, and the backend joins their transcripts in order.
+4. **Summarize:** the transcript is retained before the LLM call. Text up to 8,000 UTF-8 bytes is summarized directly. Longer text is split without dropping characters, summarized in batches, then merged. Partial summaries are condensed again when needed; the process fails if they cannot be reduced.
+5. **Retrieve:** the frontend polls `GET /uploads/{id}` every three seconds during processing. It displays the status, progress, transcript, summary, or actionable error. Copy and `.txt` downloads run in the browser.
 
-FFmpeg converts the recording into mono, 16 kHz WAV chunks of up to 240 seconds.
-Chunks are transcribed in order, then joined into one transcript. Temporary
-chunks are removed after processing. Signed-in recordings retain their original
-audio; guest audio is removed once transcription succeeds.
+### Progress and retries
 
-The transcript is saved before the summary request. This lets a failed summary
-be retried using the existing transcript instead of transcribing the audio again.
+Transcription progress is `completed chunks × 100 / total chunks`, rounded down. It is not a timer or a measure of uploaded bytes. Two chunks produce 0%, 50%, and 100%. At 100%, the job may still be `summarizing`; only `completed` means both results are ready.
 
-## Deployment design
+Account progress is committed to PostgreSQL after each chunk; guest progress is updated in memory. Temporary conversion chunks are cleaned up after transcription. A failed summary can be retried using the retained transcript, avoiding another Gnani call. A transcription failure requires the original audio and reruns transcription rather than resuming a saved partial chunk.
 
-The repository contains separate `Frontend/` and `backend/` folders.
-Railway builds each service using its own Dockerfile. The frontend runs a
-Next.js standalone server; the backend runs FastAPI with Uvicorn.
+Provider clients apply bounded retries to selected rate-limit and server responses. Exhausted retries and conversion failures produce readable errors. Failed file or database writes clean up incomplete uploads and release an unsuccessful guest quota reservation.
 
-The frontend forwards requests to `backend.railway.internal:8010`.
-The backend connects to the Railway PostgreSQL service and uses `/data`
-for persistent audio storage. Provider URLs, model selection, and credentials
-are supplied through Railway Variables.
+## Authentication and data ownership
 
-Backend startup checks storage and initializes missing database tables.
-Readiness checks verify database access and storage writes. Interrupted jobs
-are marked as failed so the user can retry them.
+Google sign-in uses OpenID Connect with `openid`, `email`, and `profile`, OAuth state, and PKCE. The callback returns through the frontend to FastAPI:
 
-Processing currently runs inside one backend instance rather than a separate
-worker queue. Background tasks do not survive a restart. Audio supports
-chunking. Long transcripts are summarized in batches of up to 8,000 UTF-8 bytes
-per provider request, then their notes are combined into one final summary.
+`https://sonora-notes.up.railway.app/api/auth/google/callback`
 
-The browser connection in the overview represents access after a frontend
-public domain is enabled. The backend and database communicate privately
-within Railway.
+FastAPI creates or finds the user, rotates the browser session, and stores only a hash of its opaque session token in PostgreSQL. Session cookies are HttpOnly, Secure in production, and SameSite=Lax. Mutating requests validate the browser origin against `APP_URL`; authentication and recording responses use `Cache-Control: no-store`.
 
+| Data | Signed-in user | Guest |
+| --- | --- | --- |
+| Original audio | Persistent `/data/audio/` file | Temporary directory |
+| Recording metadata and progress | Account-owned PostgreSQL row | In-memory guest job |
+| Transcript and summary | PostgreSQL | Server memory only |
+| Session and quota | PostgreSQL session hash and expiry | PostgreSQL session hash, expiry, and one-upload flag |
+| History | Latest 50 owned recordings | Not available |
 
+Guests may upload one recording per browser session. Their results normally expire after 60 minutes; processing jobs are protected from expiry while active, and expiry is refreshed when processing finishes. A cleanup loop removes expired jobs and temporary files. Guest audio is removed once a transcript exists, allowing summary retries without retaining audio.
 
+Guest results disappear on backend restart. Signing in does not import them: users must sign in before uploading to save a recording. Every recording read or processing request verifies account ownership or the guest session hash. Signing out revokes the database session and clears the frontend's private results. Google OAuth is currently in Testing mode, so only configured test users can sign in.
 
+## Railway deployment
+
+| Component | Runtime and configuration |
+| --- | --- |
+| Frontend | `/Frontend` Dockerfile; Next.js standalone server on port 3000; public Sonora Notes domain |
+| Backend | `/backend` Dockerfile; Uvicorn on port 8010; one worker and one replica; private service |
+| Database | Railway PostgreSQL, referenced by backend `DATABASE_URL` |
+| Audio storage | Persistent backend volume mounted at `/data` |
+| Summaries | Groq endpoint `https://api.groq.com/openai/v1` |
+
+The frontend's build-time `BACKEND_URL` is `http://backend.railway.internal:8010`. Changing it requires a frontend rebuild. The backend's `APP_URL` is `https://sonora-notes.up.railway.app`, which controls OAuth redirects and allowed browser origins.
+
+The frontend proxy rejects upload requests with a declared body size above 51 MiB. Next.js allows a 55 MB proxy buffer for multipart overhead; FastAPI separately enforces the actual 50 MiB file limit. These are different limits for different layers.
+
+Backend startup validates production settings, checks writable storage, and initializes or upgrades the schema. Interrupted saved jobs become `failed` and can be manually retried. `/live` checks process liveness; `/ready` checks the database schema and writable storage. The frontend health check reaches `/api/ready` through its proxy.
+
+The current volume uses `RAILWAY_RUN_UID=0` because its mount is root-owned. Running the container as a non-root user requires compatible volume permissions. Credentials are supplied through Railway Variables and are not embedded in frontend code.
+
+## Boundaries of the current design
+
+Background tasks and guest results live inside one backend process. They are not a durable queue and do not survive a restart. Multiple workers or replicas require a shared temporary result store and durable job coordination; account data and audio persistence alone do not solve that problem.
+
+The application currently uses local disk or a Railway volume rather than object storage. It transcribes and summarizes speech, but does not implement speaker diarization, speech separation, or audio denoising. The guest allowance is a browser-session limit, not an identity-based quota.

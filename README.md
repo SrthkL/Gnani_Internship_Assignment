@@ -1,117 +1,271 @@
-# Gnani Internship Assignment
+# Sonora · Gnani.ai Audio Notes
 
-A local audio notes project built incrementally with a FastAPI backend,
-PostgreSQL, the Gnani batch transcription API, and a Next.js frontend.
+Turn audio recordings into searchable transcripts and concise AI summaries. Sonora combines a Next.js interface with a FastAPI backend, Gnani speech recognition, and an OpenAI-compatible summarization service.
 
-## Google sign-in and private recordings
+**[Live demo](https://sonora-notes.up.railway.app/)** · **[Architecture](architecture.md)**
 
-Guests can process one recording per browser session. Guest audio uses temporary
-files; transcripts and summaries stay in server memory for 60 minutes after
-processing, never in PostgreSQL. They disappear on expiry or server restart.
-Sign in **before uploading** to save audio, transcripts and summaries privately
-to your account. Signing in does not import a temporary guest result. Each API
-request checks ownership; existing unowned demo recordings are inaccessible.
-Browser session cookies are HttpOnly, and Secure in production. Signing out
-revokes the session. Opening a new browser session starts a new guest allowance;
-this is not a limit on a person's identity.
+## Features
 
-In [Google Auth Platform](https://console.cloud.google.com/auth/clients), create
-a project, configure Branding and Audience, and create a **Web application**
-OAuth client. While the Google app is in testing, add your account as a test user.
-Register these authorized redirect URIs:
+- Upload WAV, MP3, M4A, FLAC, or OGG recordings up to **50 MiB**.
+- Transcribe audio in ordered chunks, with a **0–100% progress bar** updated after each completed chunk.
+- Generate summaries through Groq in the deployed app, or Ollama locally.
+- Copy or download transcripts and summaries as `.txt` files.
+- Sign in with Google to save recordings and reopen private results.
+- Try one recording per browser session as a guest.
+- Retry failed processing; an existing transcript is reused when only summarization needs another attempt.
 
-- Local: `http://localhost:3000/api/auth/google/callback`
-- Railway: `https://frontend-production-ef98.up.railway.app/api/auth/google/callback`
+## How the application works
 
-Add these backend variables in your local `.env` or Railway Variables:
+```text
+Browser → Next.js /api proxy → FastAPI
+                                ├─ FFmpeg → Gnani → transcript → Groq → summary
+                                ├─ PostgreSQL: accounts, sessions, saved results
+                                └─ Disk / Railway volume: audio files
+```
+
+1. **Upload:** the backend validates the recording and stores its audio file. Uploading does not start transcription automatically.
+2. **Transcribe:** the frontend starts processing, then polls for updates. FFmpeg converts the audio to mono, 16 kHz WAV chunks, each at most 240 seconds long. Gnani transcribes them in order.
+3. **Summarize:** the combined transcript is passed to the LLM. Long transcripts are split into bounded requests, summarized, and merged.
+4. **Retrieve:** the frontend displays the transcript, summary, and status. Text downloads are generated in the browser.
+
+Progress measures **completed chunks**, not elapsed time. For example, two chunks produce 0%, 50%, and 100%. The transcription bar can reach 100% while the summary is still being generated; the processing status distinguishes these stages.
+
+### Guest and account storage
+
+| Mode | Recording access | Result storage |
+| --- | --- | --- |
+| Guest | One recording per browser session | Temporary server memory; results expire after 60 minutes and are lost on backend restart |
+| Google account | Private recording history | Audio on disk; metadata, transcripts, and summaries in PostgreSQL |
+
+Sign in **before uploading** to save a recording. Signing in later does not import a guest result. PostgreSQL stores guest session and quota information, but does not store guest transcripts or summaries. Requests check recording ownership, and signing out revokes the session.
+
+## Project structure
+
+The tree below stops at two levels and omits dependencies, generated output, and local credentials.
+
+```text
+Gnani_Internship_Assignment/
+├── Frontend/
+│   ├── src/                     # Pages, layout, styles, and upload guard
+│   ├── public/
+│   ├── .env.example
+│   ├── next.config.ts           # Backend rewrites and standalone build
+│   ├── package.json
+│   └── Dockerfile
+├── backend/
+│   ├── app/                     # Auth, database, audio, and provider logic
+│   ├── tests/
+│   ├── .env.example
+│   ├── main.py                  # FastAPI application and upload routes
+│   ├── requirements.txt
+│   ├── requirements-dev.txt
+│   └── Dockerfile
+├── .github/
+│   └── workflows/               # CI checks
+├── start-backend.ps1
+├── start-frontend.ps1
+├── compose.yaml
+├── architecture.md
+└── README.md
+```
+
+## Local initialization
+
+### 1. Prerequisites and clone
+
+Install **Python 3.12**, **Node.js 24 with npm**, and **Git**. Have a reachable PostgreSQL database and a Gnani API key ready. FFmpeg is supplied by the `imageio-ffmpeg` dependency.
+
+The following commands use **PowerShell**. The repository is private, so cloning requires GitHub access.
+
+```powershell
+git clone https://github.com/SrthkL/Gnani_Internship_Assignment.git
+cd Gnani_Internship_Assignment
+```
+
+### 2. Install the backend
+
+From the repository root:
+
+```powershell
+py -3.12 -m venv backend/.venv
+& ./backend/.venv/Scripts/python.exe -m pip install -r backend/requirements.txt
+Copy-Item backend/.env.example backend/.env
+```
+
+Edit `backend/.env`. Supply `DATABASE_URL` and `GNANI_API_KEY`, then choose a summary provider:
 
 ```dotenv
+DATABASE_URL=postgresql+asyncpg://USER:PASSWORD@HOST:5432/DATABASE
+GNANI_API_KEY=your-gnani-key
+STORAGE_DIR=./storage
 APP_URL=http://localhost:3000
-GOOGLE_CLIENT_ID=your-google-client-id
-GOOGLE_CLIENT_SECRET=your-google-client-secret
-AUTH_SECRET=your-random-secret-of-at-least-32-characters
+AUDIO_CHUNK_SECONDS=240
 ```
 
-For Railway, set `APP_URL=https://frontend-production-ef98.up.railway.app`.
-Generate `AUTH_SECRET` with Python's `secrets.token_urlsafe(32)`. Keep both
-secrets out of Git. Restart the backend after changing variables. Google sign-in
-stays disabled until client credentials are supplied; production startup requires
-an authentication secret and an HTTPS frontend origin.
+For a hosted PostgreSQL database that requires TLS, use its provided connection URL. The backend accepts PostgreSQL URLs and translates `sslmode` options for the asyncpg driver. The database itself must exist before schema initialization.
 
-The local startup script and container entry point apply the ownership migration
-automatically. If starting Uvicorn manually, run `python -m app.init_db` first.
-Guest jobs still require one backend instance; multiple replicas need a shared
-temporary job store. PostgreSQL holds only guest session hashes, quota flags and
-expiry timestamps, not guest transcripts.
+**Option A — local Ollama**
 
-## Start the project
-
-Open two PowerShell terminals. These scripts locate the project themselves,
-so your terminal's current directory does not matter.
-
-Backend terminal:
+Install and start Ollama, then download the model:
 
 ```powershell
-& "C:\Users\capta\Gnani_Internship_Assignment\start-backend.ps1"
+ollama pull llama3.2:3b
 ```
 
-Frontend terminal:
+Keep these settings in `backend/.env`:
+
+```dotenv
+LLM_BASE_URL=http://localhost:11434/v1
+LLM_MODEL=llama3.2:3b
+LLM_API_KEY=
+```
+
+**Option B — Groq, matching the live app**
+
+```dotenv
+LLM_BASE_URL=https://api.groq.com/openai/v1
+LLM_MODEL=openai/gpt-oss-20b
+LLM_API_KEY=your-groq-key
+```
+
+Keep credentials in environment files or hosting variables. Never commit real keys.
+
+### 3. Install the frontend
+
+From the repository root:
 
 ```powershell
-& "C:\Users\capta\Gnani_Internship_Assignment\start-frontend.ps1"
+cd Frontend
+npm.cmd ci
+Copy-Item .env.example .env.local
+cd ..
 ```
 
-Keep both terminals open. Open `http://localhost:3000` for the upload page.
-Check `http://localhost:3000/api/live` for `{"status":"ok"}`.
-If the frontend is already running, leave that terminal open instead of
-starting a second copy.
+`Frontend/.env.local` should contain:
 
-See [architecture](architecture.md) for the Railway services, provider flow,
-persistent storage, and deployment limitations.
+```dotenv
+BACKEND_URL=http://127.0.0.1:8010
+```
 
-## Initial goal
+This is a server-side setting. Next.js compiles the backend rewrite during a production build, so rebuild after changing it.
 
-Accept an audio recording, retain the original file on local disk, and store
-its metadata, processing status, and transcript in PostgreSQL. Clients will
-retrieve results as JSON through the API.
+### 4. Start both services
 
-Audio is normalized and split into bounded chunks before transcription.
-Processing reports its stage; summaries reuse stored transcripts when retried.
-The container entry point also makes interrupted jobs available for manual retry.
+Open two PowerShell terminals at the repository root.
 
-## Storage design
+**Terminal 1 — backend**
 
-- Local disk retains original audio under `STORAGE_DIR/audio/`.
-- PostgreSQL stores upload metadata, job state, and transcript text.
-- Temporary audio conversion and chunk files are removed after processing.
-- The frontend exports finished transcripts and summaries to text files.
+```powershell
+./start-backend.ps1
+```
 
-## Local development prerequisites
+The script initializes database tables and applies the project's schema upgrades before starting FastAPI on port **8010**.
 
-- Git and Git Bash on Windows.
-- Python 3.12 and uv for virtual environments and dependency locking.
-- Node.js LTS and npm for the frontend.
-- A reachable PostgreSQL database configured by `backend/.env`.
-- Gnani credentials for deliberate live transcription checks.
-- FFmpeg is bundled through the `imageio-ffmpeg` Python dependency.
+**Terminal 2 — frontend**
 
-The backend virtual environment is `backend/.venv`. Its activation prompt
-may say `backend`; this does not change the environment's directory name.
-The frontend dependencies are installed separately in `Frontend/node_modules`.
+```powershell
+./start-frontend.ps1
+```
 
-The frontend uploads recordings, starts transcription, polls processing status,
-and displays saved transcripts and summaries. Recent recordings can be reopened;
-results have Copy and Download .txt controls.
+Open **http://localhost:3000**. Keep both terminals running.
 
-## Development workflow
+| URL | Purpose |
+| --- | --- |
+| `http://localhost:3000` | Application |
+| `http://127.0.0.1:8010/docs` | Interactive API documentation |
+| `http://localhost:3000/api/live` | Process liveness |
+| `http://localhost:3000/api/ready` | Database and storage readiness |
 
-Run Git commands from the repository root and Python commands from `backend/`.
-Implement and check each milestone before committing it. Add relevant tests
-alongside each feature; keep ordinary tests isolated from live provider calls.
-Commit an `.env.example` with placeholders when configuration is introduced.
-Keep actual credentials, personal recordings, and generated files out of Git.
+Use `localhost:3000` consistently because `APP_URL` controls the allowed browser origin. On Windows, the supplied backend script deliberately omits Uvicorn `--reload` so asynchronous FFmpeg subprocesses work reliably.
 
-## Later features
+### 5. Enable Google sign-in
 
-Speaker diarization, cloud object storage, and a durable worker queue are
-later milestones. Google authentication and private recording history are implemented.
+Guest processing works without Google credentials. To enable saved account history, create a **Web application** OAuth client in Google Auth Platform. Register:
+
+```text
+http://localhost:3000/api/auth/google/callback
+https://sonora-notes.up.railway.app/api/auth/google/callback
+```
+
+Set these backend variables:
+
+```dotenv
+GOOGLE_CLIENT_ID=your-client-id
+GOOGLE_CLIENT_SECRET=your-client-secret
+AUTH_SECRET=your-random-secret
+```
+
+Generate an authentication secret with:
+
+```powershell
+& ./backend/.venv/Scripts/python.exe -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Restart the backend after changing settings. While the Google OAuth app is in **Testing**, only configured test users can sign in. The deployed OAuth configuration currently uses this mode.
+
+## API overview
+
+The frontend reaches these routes through `/api`; FastAPI serves them without that prefix.
+
+| Method | Backend route | Purpose |
+| --- | --- | --- |
+| POST | `/uploads` | Upload multipart audio; returns a recording ID |
+| POST | `/uploads/{id}/transcribe` | Start processing or retry a failed job |
+| GET | `/uploads/{id}` | Retrieve status, progress, transcript, and summary |
+| GET | `/uploads` | List the signed-in user's saved recordings |
+| GET | `/auth/me` | Read the current session |
+| GET | `/auth/google` | Start Google sign-in |
+| GET | `/auth/google/callback` | Complete Google sign-in |
+| POST | `/auth/logout` | Revoke the current session |
+| GET | `/live`, `/ready` | Health checks |
+
+Processing runs asynchronously inside the backend process. The start request returns before transcription finishes; clients poll the recording route for results.
+
+## Validation
+
+Install the backend test dependencies and run the suite:
+
+```powershell
+& ./backend/.venv/Scripts/python.exe -m pip install -r backend/requirements-dev.txt
+cd backend
+& ./.venv/Scripts/python.exe -m pytest tests -q --basetemp=./.pytest_cache/tmp
+cd ..
+```
+
+The explicit temporary directory avoids Windows permissions problems with shared pytest folders. Tests cover audio chunking, authentication and ownership, storage failures, provider retries, summary chunking, and deployment configuration. Provider responses are mocked in the automated suite; real Gnani and LLM calls are separate integration checks.
+
+Check the frontend:
+
+```powershell
+cd Frontend
+npm.cmd run lint
+npm.cmd run build
+cd ..
+```
+
+GitHub Actions runs backend tests, frontend lint, and both Docker builds.
+
+## Railway deployment
+
+The deployed system uses **three services**: Next.js frontend, FastAPI backend, and PostgreSQL. A persistent volume mounted at `/data` retains saved audio. The frontend proxies requests to the private backend address.
+
+| Service | Essential configuration |
+| --- | --- |
+| Frontend | Root `/Frontend`; `BACKEND_URL=http://backend.railway.internal:8010`; port `3000`; health check `/api/ready` |
+| Backend | Root `/backend`; `APP_ENV=production`; `APP_URL=https://sonora-notes.up.railway.app`; `STORAGE_DIR=/data`; port `8010`; health check `/ready` |
+| PostgreSQL | Backend `DATABASE_URL` references the database service |
+
+Set Gnani, Groq, Google OAuth, and authentication secrets in Railway Variables. The hosted summary provider uses Groq with `openai/gpt-oss-20b`; a laptop's Ollama `localhost` address is not reachable from Railway.
+
+The container entry point initializes the schema and marks interrupted saved jobs as failed so users can retry them. Keep the backend at **one worker and one replica**: guest results and background tasks are held in process memory. A durable queue and shared temporary store are needed before scaling to multiple instances.
+
+The current Railway volume runs with `RAILWAY_RUN_UID=0` to allow writes to its root-owned mount. A deployment using a non-root container user needs matching volume permissions.
+
+For service relationships and storage details, see [architecture.md](architecture.md).
+
+## Current scope and future work
+
+Processing currently uses one backend instance, temporary guest results, and persistent storage for signed-in recordings. Speaker diarization and a durable worker queue are not yet implemented.
+
+- **Lossless audio compression:** evaluate FLAC for large recordings to reduce upload bandwidth and storage while preserving decoded audio samples. Benchmark compression cost and savings under concurrent use; pair it with shared storage and a durable queue to support more users.
+- **Noise reduction before transcription:** explore wavelet analysis and empirical mode decomposition (EMD) to suppress noise while preserving speech. Compare transcript accuracy and processing time against unprocessed audio, and retain the original recording because denoising changes the signal.
