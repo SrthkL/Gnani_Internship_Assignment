@@ -1,0 +1,11 @@
+.env
+.env.*
+.venv
+storage
+work
+tests
+__pycache__
+**/__pycache__
+.pytest_cache
+*.log
+*.pyc

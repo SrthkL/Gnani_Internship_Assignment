@@ -25,8 +25,10 @@ Check `http://localhost:3000/api/live` for `{"status":"ok"}`.
 If the frontend is already running, leave that terminal open instead of
 starting a second copy.
 
-See [local development and startup fixes](docs/local-development.md) for
-configuration, annotated commands, troubleshooting, and verification results.
+See [deployment setup](DEPLOYMENT.md) for Railway configuration, production
+containers, persistent storage, and deployment limitations. See
+[transcription retry fixes](backend/TRANSCRIPTION_RETRY_FIX.md) for provider
+error handling and recovery.
 
 ## Initial goal
 
@@ -34,16 +36,16 @@ Accept an audio recording, retain the original file on local disk, and store
 its metadata, processing status, and transcript in PostgreSQL. Clients will
 retrieve results as JSON through the API.
 
-The first prototype will transcribe one small recording. Later milestones
-will introduce a separate durable worker, bounded audio chunks, progress
-reporting, and recovery of interrupted jobs.
+Audio is normalized and split into bounded chunks before transcription.
+Processing reports its stage; summaries reuse stored transcripts when retried.
+The container entry point also makes interrupted jobs available for manual retry.
 
 ## Storage design
 
 - Local disk retains original audio under `STORAGE_DIR/audio/`.
 - PostgreSQL stores upload metadata, job state, and transcript text.
 - Temporary audio conversion and chunk files are removed after processing.
-- Exporting finished transcripts to text files is an optional later feature.
+- The frontend exports finished transcripts and summaries to text files.
 
 ## Local development prerequisites
 
@@ -52,15 +54,15 @@ reporting, and recovery of interrupted jobs.
 - Node.js LTS and npm for the frontend.
 - A reachable PostgreSQL database configured by `backend/.env`.
 - Gnani credentials for deliberate live transcription checks.
-- FFmpeg when audio normalization and chunking are introduced.
+- FFmpeg is bundled through the `imageio-ffmpeg` Python dependency.
 
 The backend virtual environment is `backend/.venv`. Its activation prompt
 may say `backend`; this does not change the environment's directory name.
 The frontend dependencies are installed separately in `Frontend/node_modules`.
 
-The frontend currently uploads recordings and displays the returned recording
-ID. Transcription and summary endpoints are available in the backend; connecting
-those controls to the frontend is the next interface milestone.
+The frontend uploads recordings, starts transcription, polls processing status,
+and displays saved transcripts and summaries. Recent recordings can be reopened;
+results have Copy and Download .txt controls.
 
 ## Development workflow
 
@@ -72,5 +74,6 @@ Keep actual credentials, personal recordings, and generated files out of Git.
 
 ## Later features
 
-Frontend transcription controls, speaker diarization, cloud object storage,
-deployment, authentication, and durable job recovery are later milestones.
+Speaker diarization, cloud object storage, authentication, and a durable worker
+queue are later milestones. Deployment configuration is available in
+[DEPLOYMENT.md](DEPLOYMENT.md).

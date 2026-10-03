@@ -1,4 +1,5 @@
 from pathlib import Path
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -7,6 +8,7 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
+    APP_ENV: str = "development"
     DATABASE_URL: str
     STORAGE_DIR: str = str(BACKEND_DIR / "storage")
     AUDIO_CHUNK_SECONDS: int = 240
@@ -16,6 +18,7 @@ class Settings(BaseSettings):
     GNANI_POLL_SECONDS: int = 10
     LLM_BASE_URL: str = "http://localhost:11434/v1"
     LLM_MODEL: str = "llama3.2:3b"
+    LLM_API_KEY: SecretStr = SecretStr("")
     LLM_TIMEOUT_SECONDS: int = 180
 
     model_config = SettingsConfigDict(

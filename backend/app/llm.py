@@ -4,7 +4,7 @@ from app.config import settings
 
 
 async def summarize_transcript(transcript: str) -> str:
-    """Generate a short factual summary using the local LLM."""
+    """Generate a summary using a local or hosted compatible LLM."""
 
     transcript = transcript.strip()
 
@@ -34,8 +34,10 @@ async def summarize_transcript(transcript: str) -> str:
     async with httpx.AsyncClient(
         timeout=settings.LLM_TIMEOUT_SECONDS,
     ) as client:
+        api_key = settings.LLM_API_KEY.get_secret_value()
         response = await client.post(
             f"{settings.LLM_BASE_URL.rstrip('/')}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"} if api_key else {},
             json={
                 "model": settings.LLM_MODEL,
                 "messages": messages,

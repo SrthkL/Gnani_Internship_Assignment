@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type Upload = {
   id: string;
@@ -10,12 +10,124 @@ type Upload = {
   error_message?: string | null;
 };
 
+type RecentUpload = Upload & {
+  filename: string;
+};
+
+function ResultPanel({
+  title,
+  text,
+  filename,
+}: {
+  title: "Transcript" | "Summary";
+  text: string;
+  filename: string;
+}) {
+  const [copying, setCopying] = useState(false);
+  const [feedback, setFeedback] = useState<{
+    message: string;
+    failed: boolean;
+  } | null>(null);
+  const headingId = `${title.toLowerCase()}-heading`;
+
+  async function copyText() {
+    if (copying) return;
+    setCopying(true);
+    setFeedback(null);
+
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("Clipboard unavailable");
+      }
+      await navigator.clipboard.writeText(text);
+      setFeedback({ message: `${title} copied.`, failed: false });
+    } catch {
+      setFeedback({
+        message: "Could not copy. Use Download .txt or select the text instead.",
+        failed: true,
+      });
+    } finally {
+      setCopying(false);
+    }
+  }
+
+  function downloadText() {
+    setFeedback(null);
+    let objectUrl: string | undefined;
+    let link: HTMLAnchorElement | undefined;
+
+    try {
+      // Export the saved text as UTF-8, including multilingual characters.
+      objectUrl = URL.createObjectURL(new Blob([text], {
+        type: "text/plain;charset=utf-8",
+      }));
+      link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+    } catch {
+      setFeedback({ message: "Could not start the download. Please retry.", failed: true });
+    } finally {
+      link?.remove();
+      if (objectUrl) {
+        const urlToRelease = objectUrl;
+        // Give the browser time to begin downloading before releasing the URL.
+        window.setTimeout(() => URL.revokeObjectURL(urlToRelease), 1000);
+      }
+    }
+  }
+
+  return (
+    <section
+      aria-labelledby={headingId}
+      className="rounded-2xl border border-slate-800 bg-slate-900 p-6"
+    >
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <h2 id={headingId} className="text-xl font-semibold">{title}</h2>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={copyText}
+            disabled={copying}
+            aria-label={`Copy ${title.toLowerCase()}`}
+            className="rounded-lg bg-slate-800 px-3 py-2 text-sm hover:bg-slate-700 disabled:opacity-50"
+          >
+            {copying ? "Copying…" : "Copy"}
+          </button>
+          <button
+            type="button"
+            onClick={downloadText}
+            aria-label={`Download ${title.toLowerCase()} as text`}
+            className="rounded-lg bg-slate-800 px-3 py-2 text-sm hover:bg-slate-700"
+          >
+            Download .txt
+          </button>
+        </div>
+      </div>
+      {feedback && (
+        <p
+          role={feedback.failed ? "alert" : "status"}
+          className={`mb-4 text-sm ${feedback.failed ? "text-red-400" : "text-emerald-300"}`}
+        >
+          {feedback.message}
+        </p>
+      )}
+      <p className="whitespace-pre-wrap leading-7 text-slate-300">{text}</p>
+    </section>
+  );
+}
+
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [upload, setUpload] = useState<Upload | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
   const [startingTranscription, setStartingTranscription] = useState(false);
+  const [recordings, setRecordings] = useState<RecentUpload[] | null>(null);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [historyError, setHistoryError] = useState("");
+  const audioInputRef = useRef<HTMLInputElement>(null);
   const uploadId = upload?.id;
   const isProcessing =
     upload?.status === "transcribing" ||
@@ -25,6 +137,7 @@ export default function Home() {
   // A completed POST contains only ID/status, so retrieve its results once too.
   const shouldRefresh =
     isProcessing ||
+    (upload?.status === "failed" && upload.error_message === undefined) ||
     (upload?.status === "completed" &&
       (upload.transcript === undefined || upload.summary === undefined));
 
@@ -144,6 +257,43 @@ export default function Home() {
     }
   }
 
+  async function loadRecordings() {
+    if (loadingHistory) return;
+
+    setLoadingHistory(true);
+    setHistoryError("");
+
+    try {
+      // Read saved results; this endpoint does not start transcription.
+      const response = await fetch("/api/uploads", { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error(`Could not load recordings (${response.status}).`);
+      }
+
+      const data: unknown = await response.json();
+      if (
+        !Array.isArray(data) ||
+        !data.every(
+          (recording) =>
+            recording &&
+            typeof recording.id === "string" &&
+            typeof recording.filename === "string" &&
+            typeof recording.status === "string",
+        )
+      ) {
+        throw new Error("Unexpected recording history response.");
+      }
+
+      setRecordings(data as RecentUpload[]);
+    } catch (error) {
+      setHistoryError(
+        error instanceof Error ? error.message : "Could not load recordings.",
+      );
+    } finally {
+      setLoadingHistory(false);
+    }
+  }
+
   async function startTranscription() {
     if (!upload || isBusy || !["uploaded", "failed"].includes(upload.status)) {
       return;
@@ -179,7 +329,7 @@ export default function Home() {
       // Preserve the transcript when retrying a failed summary.
       setUpload((current) =>
         current && current.id === data.id
-          ? { ...current, status: data.status, summary: undefined }
+          ? { ...current, status: data.status, summary: undefined, error_message: undefined }
           : current,
       );
     } catch (error) {
@@ -221,6 +371,7 @@ export default function Home() {
           </label>
 
           <input
+            ref={audioInputRef}
             id="audio"
             type="file"
             accept=".wav,.mp3,.m4a,.flac,.ogg"
@@ -287,32 +438,89 @@ export default function Home() {
           )}
         </form>
 
-        {upload?.transcript && (
-          <section
-            aria-labelledby="transcript-heading"
-            className="rounded-2xl border border-slate-800 bg-slate-900 p-6"
-          >
-            <h2 id="transcript-heading" className="mb-4 text-xl font-semibold">
-              Transcript
+        <section
+          aria-labelledby="history-heading"
+          aria-busy={loadingHistory}
+          className="rounded-2xl border border-slate-800 bg-slate-900 p-6"
+        >
+          <div className="flex items-center justify-between gap-4">
+            <h2 id="history-heading" className="text-xl font-semibold">
+              Recent recordings
             </h2>
-            <p className="whitespace-pre-wrap leading-7 text-slate-300">
-              {upload.transcript}
+            <button
+              type="button"
+              onClick={loadRecordings}
+              disabled={loadingHistory}
+              className="rounded-lg bg-slate-800 px-4 py-2 text-sm hover:bg-slate-700 disabled:opacity-50"
+            >
+              {loadingHistory
+                ? "Loading…"
+                : recordings === null
+                  ? "Load recordings"
+                  : "Refresh recordings"}
+            </button>
+          </div>
+
+          {historyError && (
+            <p role="alert" className="mt-4 text-sm text-red-400">
+              {historyError}
             </p>
-          </section>
+          )}
+
+          {recordings === null && !historyError && (
+            <p className="mt-4 text-sm text-slate-400">
+              Load your recordings to reopen saved transcripts and summaries.
+            </p>
+          )}
+
+          {recordings?.length === 0 && (
+            <p className="mt-4 text-sm text-slate-400">No recordings yet.</p>
+          )}
+
+          <ul className="mt-4 space-y-3">
+            {recordings?.map((recording) => (
+              <li key={recording.id}>
+                <button
+                  type="button"
+                  disabled={isBusy}
+                  aria-current={upload?.id === recording.id ? "true" : undefined}
+                  onClick={() => {
+                    // Clear the previous file selection when reopening a saved recording.
+                    setFile(null);
+                    if (audioInputRef.current) audioInputRef.current.value = "";
+                    setUpload(recording);
+                    setError(
+                      recording.status === "failed"
+                        ? recording.error_message || "Processing failed. You can retry processing."
+                        : "",
+                    );
+                  }}
+                  className="w-full rounded-lg border border-slate-700 p-4 text-left hover:border-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <p className="break-words font-medium">{recording.filename}</p>
+                  <p className="mt-1 text-sm text-slate-400">{recording.status}</p>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        {upload?.transcript && (
+          <ResultPanel
+            key={`transcript-${upload.id}`}
+            title="Transcript"
+            text={upload.transcript}
+            filename={`transcript-${upload.id}.txt`}
+          />
         )}
 
         {upload?.summary && (
-          <section
-            aria-labelledby="summary-heading"
-            className="rounded-2xl border border-slate-800 bg-slate-900 p-6"
-          >
-            <h2 id="summary-heading" className="mb-4 text-xl font-semibold">
-              Summary
-            </h2>
-            <p className="whitespace-pre-wrap leading-7 text-slate-300">
-              {upload.summary}
-            </p>
-          </section>
+          <ResultPanel
+            key={`summary-${upload.id}`}
+            title="Summary"
+            text={upload.summary}
+            filename={`summary-${upload.id}.txt`}
+          />
         )}
       </div>
     </main>

@@ -1,0 +1,51 @@
+name: Deployment checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+      APP_ENV: development
+      GNANI_API_KEY: test-key
+      LLM_API_KEY: ""
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - run: python -m pip install -r backend/requirements-dev.txt
+      - run: python -m pytest tests -q
+        working-directory: backend
+      - name: Build Linux backend image
+        run: docker build -t gnani-backend:check ./backend
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: Frontend/package-lock.json
+      - run: npm ci
+        working-directory: Frontend
+      - run: npm run lint
+        working-directory: Frontend
+      - name: Build Linux frontend image and production bundle
+        run: docker build --build-arg BACKEND_URL=http://backend:8010 -t gnani-frontend:check ./Frontend

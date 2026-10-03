@@ -12,6 +12,7 @@ from app.schemas import UploadResponse, UploadDetail
 from app.config import BACKEND_DIR, settings
 from app.gnani import transcribe_audio
 from app.tasks import process_upload
+from app.health import check_readiness
 
 app = FastAPI(title="Audio Notes API")
 
@@ -26,6 +27,13 @@ async def get_db():
 @app.get("/live")
 async def live(): #checking wether the API is responding
     return {"status": "ok"}
+
+
+@app.get("/ready")
+async def ready(db: AsyncSession = Depends(get_db)):
+    """Verify the database schema and writable audio storage for deployment."""
+    await check_readiness(db)
+    return {"status": "ready"}
 
 
 @app.post("/uploads", response_model=UploadResponse, status_code=201)

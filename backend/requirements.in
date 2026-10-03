@@ -1,0 +1,10 @@
+# Runtime dependencies only. Compile requirements.txt with uv pip compile.
+fastapi==0.142.2
+uvicorn==0.54.0
+sqlalchemy[asyncio]==2.1.1
+asyncpg==0.31.0
+pydantic==2.13.5
+pydantic-settings==2.15.0
+python-multipart==0.0.32
+httpx==0.28.1
+imageio-ffmpeg==0.6.0
