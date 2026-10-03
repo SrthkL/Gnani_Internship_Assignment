@@ -4,10 +4,72 @@ from pathlib import Path
 import asyncio
 import httpx
 import shutil
+import logging
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 from app.audio import prepare_audio
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
+
+
+def _retry_delay(response: httpx.Response, attempt: int) -> float:
+    """Honor Retry-After, with bounded exponential backoff as the fallback."""
+    retry_after = response.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return max(10, float(retry_after))
+        except ValueError:
+            try:
+                deadline = parsedate_to_datetime(retry_after)
+                if deadline.tzinfo is None:
+                    deadline = deadline.replace(tzinfo=timezone.utc)
+                return max(10, (deadline - datetime.now(timezone.utc)).total_seconds())
+            except (ValueError, TypeError, OverflowError):
+                pass
+    return min(60, 10 * (2 ** attempt))
+
+
+async def _request_with_retry(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    *,
+    retry_server_errors: bool = False,
+    **kwargs,
+) -> httpx.Response:
+    """Retry rate limits; only retry ambiguous failures for safe operations."""
+    safe_to_repeat = method == "GET" or retry_server_errors
+    for attempt in range(4):
+        # HTTPX has consumed the audio stream after the previous attempt.
+        for value in kwargs.get("files", {}).values():
+            if isinstance(value, tuple) and len(value) > 1:
+                stream = value[1]
+                if hasattr(stream, "seek"):
+                    stream.seek(0)
+        try:
+            response = await client.request(method, url, **kwargs)
+        except httpx.TransportError:
+            if not safe_to_repeat or attempt == 3:
+                raise
+            await asyncio.sleep(min(60, 10 * (2 ** attempt)))
+            continue
+
+        should_retry = response.status_code == 429 or (
+            safe_to_repeat and response.status_code in {500, 502, 503, 504}
+        )
+        if not should_retry:
+            return response
+        if attempt == 3:
+            response.raise_for_status()
+
+        delay = _retry_delay(response, attempt)
+        logger.warning("Speech request returned HTTP %s; retrying in %.1fs", response.status_code, delay)
+        await asyncio.sleep(delay)
+
+    raise RuntimeError("Speech request retries exhausted")
 
 
 async def create_job(audio_path: str) -> str:
@@ -18,7 +80,7 @@ async def create_job(audio_path: str) -> str:
 
     path = Path(audio_path)
 
-    # Larger recordings will need chunking, which we will add later.
+    # This function receives a bounded chunk from prepare_audio.
     if path.stat().st_size > 10 * 1024 * 1024:
         raise ValueError("Audio is too large for direct upload")
 
@@ -35,7 +97,9 @@ async def create_job(audio_path: str) -> str:
 
     async with httpx.AsyncClient(timeout=120) as client:
         with path.open("rb") as audio:
-            response = await client.post(
+            response = await _request_with_retry(
+                client,
+                "POST",
                 f"{settings.GNANI_BASE_URL.rstrip('/')}/stt/v3/batch/jobs",
                 headers={"X-API-Key-ID": settings.GNANI_API_KEY},
                 files={
@@ -55,10 +119,25 @@ async def start_job(job_id: str) -> None:
     """Tell Gnani to begin processing an already-created job."""
 
     async with httpx.AsyncClient(timeout=120) as client:
-        response = await client.post(
+        response = await _request_with_retry(
+            client,
+            "POST",
             f"{settings.GNANI_BASE_URL.rstrip('/')}/stt/v3/batch/jobs/{job_id}/start",
+            retry_server_errors=True,
             headers={"X-API-Key-ID": settings.GNANI_API_KEY},
         )
+
+        # A lost start response may be retried after the provider already started.
+        if response.status_code == 409:
+            state = await _request_with_retry(
+                client,
+                "GET",
+                f"{settings.GNANI_BASE_URL.rstrip('/')}/stt/v3/batch/jobs/{job_id}",
+                headers={"X-API-Key-ID": settings.GNANI_API_KEY},
+            )
+            state.raise_for_status()
+            if state.json().get("status") in {"STARTING", "QUEUED", "IN_PROGRESS", "COMPLETED"}:
+                return
 
         response.raise_for_status()
 
@@ -75,7 +154,9 @@ async def wait_for_completion(
         # Limit the entire wait, including HTTP requests and pauses.
         async with asyncio.timeout(timeout_seconds):
             while True:
-                response = await client.get(
+                response = await _request_with_retry(
+                    client,
+                    "GET",
                     f"{settings.GNANI_BASE_URL.rstrip('/')}/stt/v3/batch/jobs/{job_id}",
                     headers={"X-API-Key-ID": settings.GNANI_API_KEY},
                 )
@@ -106,7 +187,9 @@ async def fetch_transcript(job_id: str) -> str:
         follow_redirects=True,
     ) as client:
         # Ask Gnani for the completed file's download link.
-        response = await client.get(
+        response = await _request_with_retry(
+            client,
+            "GET",
             f"{settings.GNANI_BASE_URL.rstrip('/')}/stt/v3/batch/jobs/{job_id}/files",
             headers={"X-API-Key-ID": settings.GNANI_API_KEY},
             params={"status": "COMPLETED"},
@@ -124,7 +207,7 @@ async def fetch_transcript(job_id: str) -> str:
             raise RuntimeError("Transcript download link is missing")
 
         # The signed download URL does not require our API key.
-        result = await client.get(transcript_url)
+        result = await _request_with_retry(client, "GET", transcript_url)
         result.raise_for_status()
 
         transcript = result.json().get("full_transcript")

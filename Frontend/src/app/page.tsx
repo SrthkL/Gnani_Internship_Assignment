@@ -7,6 +7,7 @@ type Upload = {
   status: string;
   transcript?: string | null;
   summary?: string | null;
+  error_message?: string | null;
 };
 
 export default function Home() {
@@ -59,11 +60,15 @@ export default function Home() {
           transcript:
             typeof data.transcript === "string" ? data.transcript : null,
           summary: typeof data.summary === "string" ? data.summary : null,
+          error_message:
+            typeof data.error_message === "string" ? data.error_message : null,
         });
 
         setError(
           data.status === "failed"
-            ? "Processing failed. You can retry processing."
+            ? (typeof data.error_message === "string" && data.error_message
+              ? data.error_message
+              : "Processing failed. You can retry processing.")
             : "",
         );
       } catch {

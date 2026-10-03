@@ -41,3 +41,6 @@ class Upload(Base):
         Text,
         nullable=True,
     )
+
+    # This column already exists in the shared uploads table.
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
