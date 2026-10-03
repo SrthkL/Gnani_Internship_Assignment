@@ -43,13 +43,21 @@ async def test_transcribe_audio_combines_chunks_and_cleans_up(
     monkeypatch.setattr(gnani, "wait_for_completion", fake_job_action)
     monkeypatch.setattr(gnani, "fetch_transcript", fake_fetch_transcript)
 
-    transcript = await gnani.transcribe_audio("unused-source.wav")
+    progress = []
+
+    async def record_progress(percent):
+        progress.append(percent)
+
+    transcript = await gnani.transcribe_audio(
+        "unused-source.wav", on_progress=record_progress,
+    )
 
     assert transcript == (
         "First part of the recording.\n"
         "Second part of the recording."
     )
     assert not directory.exists()
+    assert progress == [50, 100]
 
 
 @pytest.mark.asyncio
@@ -61,15 +69,32 @@ async def test_transcribe_audio_cleans_up_on_failure(
     directory.mkdir()
 
     async def fake_prepare_audio(audio_path):
-        return str(directory), ["unused-chunk.wav"]
+        return str(directory), ["first-chunk.wav", "failed-chunk.wav"]
 
     async def fake_create_job(audio_path):
-        raise RuntimeError("Provider unavailable")
+        if audio_path == "failed-chunk.wav":
+            raise RuntimeError("Provider unavailable")
+        return "first-job"
+
+    async def fake_job_action(job_id):
+        pass
+
+    async def fake_fetch_transcript(job_id):
+        return "First chunk completed."
+
+    progress = []
+
+    async def record_progress(percent):
+        progress.append(percent)
 
     monkeypatch.setattr(gnani, "prepare_audio", fake_prepare_audio)
     monkeypatch.setattr(gnani, "create_job", fake_create_job)
+    monkeypatch.setattr(gnani, "start_job", fake_job_action)
+    monkeypatch.setattr(gnani, "wait_for_completion", fake_job_action)
+    monkeypatch.setattr(gnani, "fetch_transcript", fake_fetch_transcript)
 
     with pytest.raises(RuntimeError, match="Provider unavailable"):
-        await gnani.transcribe_audio("unused-source.wav")
+        await gnani.transcribe_audio("unused-source.wav", on_progress=record_progress)
 
     assert not directory.exists()
+    assert progress == [50]

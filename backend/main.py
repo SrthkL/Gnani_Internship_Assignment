@@ -127,7 +127,7 @@ async def transcribe_upload(
 
     # Reserve the job before releasing the database lock.
     upload.status = "transcribing"
-    upload.progress = 0
+    upload.progress = 100 if upload.transcript else 0
     await db.commit()
 
     # Pass the ID; the task creates its own database session.

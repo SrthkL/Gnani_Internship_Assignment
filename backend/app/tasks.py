@@ -59,7 +59,14 @@ async def process_upload(upload_id: str) -> None:
                 if not audio_path.is_file():
                     raise FileNotFoundError("Stored recording is missing")
 
-                upload.transcript = await transcribe_audio(str(audio_path))
+                async def save_progress(percent: int) -> None:
+                    upload.progress = percent
+                    # Make each completed chunk visible to polling requests.
+                    await db.commit()
+
+                upload.transcript = await transcribe_audio(
+                    str(audio_path), on_progress=save_progress,
+                )
 
             # Persist the transcript before contacting the LLM.
             upload.progress = 100

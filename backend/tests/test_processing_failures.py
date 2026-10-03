@@ -6,6 +6,10 @@ import httpx
 import pytest
 
 from app import tasks
+import main
+from app.db import Base
+from app.models import Upload
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
 def mock_session(monkeypatch, upload):
@@ -70,3 +74,62 @@ async def test_retry_uses_saved_transcript_without_calling_provider(monkeypatch)
     assert upload.error_message is None
     transcription.assert_not_awaited()
     summary.assert_awaited_once_with("The saved transcript.")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_later_chunk", [False, True])
+async def test_chunk_progress_is_visible_to_polling_and_survives_failure(
+    monkeypatch, tmp_path, fail_later_chunk,
+):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'progress.db'}")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    (tmp_path / "recording.wav").write_bytes(b"test-audio")
+    async with sessions() as db:
+        db.add(Upload(
+            id="progress-test", filename="recording.wav", storage_key="recording.wav",
+            status="transcribing", progress=0,
+        ))
+        await db.commit()
+
+    async def dependency():
+        async with sessions() as db:
+            yield db
+
+    main.app.dependency_overrides[main.get_db] = dependency
+    monkeypatch.setattr(tasks, "AsyncSessionLocal", sessions)
+    monkeypatch.setattr(tasks.settings, "STORAGE_DIR", str(tmp_path))
+    summary = AsyncMock(return_value="Saved summary.")
+    monkeypatch.setattr(tasks, "summarize_transcript", summary)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=main.app), base_url="http://test",
+    ) as client:
+        async def fake_transcribe(audio_path, on_progress):
+            await on_progress(50)
+            # A separate API session must see progress before processing ends.
+            response = await client.get("/uploads/progress-test")
+            assert response.status_code == 200
+            assert response.json()["progress"] == 50
+            assert response.json()["status"] == "transcribing"
+            assert response.json()["transcript"] is None
+            if fail_later_chunk:
+                raise RuntimeError("Later chunk failed")
+            await on_progress(100)
+            return "Saved transcript."
+
+        monkeypatch.setattr(tasks, "transcribe_audio", fake_transcribe)
+        try:
+            await tasks.process_upload("progress-test")
+            result = (await client.get("/uploads/progress-test")).json()
+            assert result["progress"] == (50 if fail_later_chunk else 100)
+            assert result["status"] == ("failed" if fail_later_chunk else "completed")
+            if fail_later_chunk:
+                summary.assert_not_awaited()
+            else:
+                assert result["transcript"] == "Saved transcript."
+                assert result["summary"] == "Saved summary."
+        finally:
+            main.app.dependency_overrides.clear()
+            await engine.dispose()

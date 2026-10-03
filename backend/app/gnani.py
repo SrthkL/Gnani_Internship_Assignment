@@ -5,6 +5,7 @@ import asyncio
 import httpx
 import shutil
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
@@ -217,7 +218,10 @@ async def fetch_transcript(job_id: str) -> str:
 
         return transcript
 
-async def transcribe_audio(audio_path: str) -> str:
+async def transcribe_audio(
+    audio_path: str,
+    on_progress: Callable[[int], Awaitable[None]] | None = None,
+) -> str:
     """Prepare audio, transcribe its chunks, and combine their text."""
 
     directory, chunks = await prepare_audio(audio_path)
@@ -226,13 +230,16 @@ async def transcribe_audio(audio_path: str) -> str:
         transcripts = []
 
         # Process chunks sequentially to preserve recording order.
-        for chunk_path in chunks:
+        for completed, chunk_path in enumerate(chunks, start=1):
             job_id = await create_job(chunk_path)
             await start_job(job_id)
             await wait_for_completion(job_id)
 
             text = await fetch_transcript(job_id)
             transcripts.append(text)
+            # Count a chunk only after its transcript has been retrieved.
+            if on_progress is not None:
+                await on_progress(completed * 100 // len(chunks))
 
         return "\n".join(transcripts)
 

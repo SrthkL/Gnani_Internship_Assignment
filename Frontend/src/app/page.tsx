@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 type Upload = {
   id: string;
   status: string;
+  progress?: number;
   transcript?: string | null;
   summary?: string | null;
   error_message?: string | null;
@@ -133,6 +134,10 @@ export default function Home() {
     upload?.status === "transcribing" ||
     upload?.status === "summarizing";
   const isBusy = uploading || startingTranscription || isProcessing;
+  const transcriptionProgress = upload?.transcript ||
+    upload?.status === "summarizing" || upload?.status === "completed"
+    ? 100
+    : Math.min(100, Math.max(0, Math.floor(upload?.progress ?? 0)));
 
   // A completed POST contains only ID/status, so retrieve its results once too.
   const shouldRefresh =
@@ -170,6 +175,8 @@ export default function Home() {
         setUpload({
           id: data.id,
           status: data.status,
+          progress: typeof data.progress === "number" && Number.isFinite(data.progress)
+            ? data.progress : 0,
           transcript:
             typeof data.transcript === "string" ? data.transcript : null,
           summary: typeof data.summary === "string" ? data.summary : null,
@@ -246,7 +253,7 @@ export default function Home() {
         throw new Error("The server returned an unexpected response.");
       }
 
-      setUpload({ id: data.id, status: data.status });
+      setUpload({ id: data.id, status: data.status, progress: 0 });
     } catch (error) {
       setError(
         error instanceof Error ? error.message : "Upload failed. Try again.",
@@ -329,7 +336,13 @@ export default function Home() {
       // Preserve the transcript when retrying a failed summary.
       setUpload((current) =>
         current && current.id === data.id
-          ? { ...current, status: data.status, summary: undefined, error_message: undefined }
+          ? {
+            ...current,
+            status: data.status,
+            progress: current.transcript ? 100 : 0,
+            summary: undefined,
+            error_message: undefined,
+          }
           : current,
       );
     } catch (error) {
@@ -418,6 +431,36 @@ export default function Home() {
               <p className="mt-3 text-sm text-slate-300">
                   Status: {upload.status}
               </p>
+              <div className="mt-4">
+                <div className="mb-2 flex items-center justify-between text-sm">
+                  <span id="transcription-progress-label">Transcription progress</span>
+                  <span className="tabular-nums">{transcriptionProgress}%</span>
+                </div>
+                <div
+                  role="progressbar"
+                  aria-labelledby="transcription-progress-label"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={transcriptionProgress}
+                  className="h-2 overflow-hidden rounded-full bg-slate-800"
+                >
+                  <div
+                    style={{ width: `${transcriptionProgress}%` }}
+                    className="h-full rounded-full bg-sky-400 transition-[width] duration-300 motion-reduce:transition-none"
+                  />
+                </div>
+                <p className="mt-2 text-xs text-slate-400">
+                  {upload.status === "summarizing"
+                    ? "Transcription complete. Generating summary…"
+                    : upload.status === "completed"
+                      ? "Transcription and summary complete."
+                      : upload.status === "failed"
+                        ? "Processing stopped. You can retry."
+                        : upload.status === "uploaded"
+                          ? "Ready to start transcription."
+                          : "Updates after each audio chunk is transcribed."}
+                </p>
+              </div>
               <button
                 type="button"
                 onClick={startTranscription}
