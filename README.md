@@ -3,6 +3,47 @@
 A local audio notes project built incrementally with a FastAPI backend,
 PostgreSQL, the Gnani batch transcription API, and a Next.js frontend.
 
+## Google sign-in and private recordings
+
+Guests can process one recording per browser session. Guest audio uses temporary
+files; transcripts and summaries stay in server memory for 60 minutes after
+processing, never in PostgreSQL. They disappear on expiry or server restart.
+Sign in **before uploading** to save audio, transcripts and summaries privately
+to your account. Signing in does not import a temporary guest result. Each API
+request checks ownership; existing unowned demo recordings are inaccessible.
+Browser session cookies are HttpOnly, and Secure in production. Signing out
+revokes the session. Opening a new browser session starts a new guest allowance;
+this is not a limit on a person's identity.
+
+In [Google Auth Platform](https://console.cloud.google.com/auth/clients), create
+a project, configure Branding and Audience, and create a **Web application**
+OAuth client. While the Google app is in testing, add your account as a test user.
+Register these authorized redirect URIs:
+
+- Local: `http://localhost:3000/api/auth/google/callback`
+- Railway: `https://frontend-production-ef98.up.railway.app/api/auth/google/callback`
+
+Add these backend variables in your local `.env` or Railway Variables:
+
+```dotenv
+APP_URL=http://localhost:3000
+GOOGLE_CLIENT_ID=your-google-client-id
+GOOGLE_CLIENT_SECRET=your-google-client-secret
+AUTH_SECRET=your-random-secret-of-at-least-32-characters
+```
+
+For Railway, set `APP_URL=https://frontend-production-ef98.up.railway.app`.
+Generate `AUTH_SECRET` with Python's `secrets.token_urlsafe(32)`. Keep both
+secrets out of Git. Restart the backend after changing variables. Google sign-in
+stays disabled until client credentials are supplied; production startup requires
+an authentication secret and an HTTPS frontend origin.
+
+The local startup script and container entry point apply the ownership migration
+automatically. If starting Uvicorn manually, run `python -m app.init_db` first.
+Guest jobs still require one backend instance; multiple replicas need a shared
+temporary job store. PostgreSQL holds only guest session hashes, quota flags and
+expiry timestamps, not guest transcripts.
+
 ## Start the project
 
 Open two PowerShell terminals. These scripts locate the project themselves,

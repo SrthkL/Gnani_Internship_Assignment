@@ -9,6 +9,9 @@ from app import tasks
 import main
 from app.db import Base
 from app.models import Upload
+from app.auth import new_session
+from app.models import User
+from fastapi import Response
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
@@ -87,9 +90,12 @@ async def test_chunk_progress_is_visible_to_polling_and_survives_failure(
         await connection.run_sync(Base.metadata.create_all)
     (tmp_path / "recording.wav").write_bytes(b"test-audio")
     async with sessions() as db:
+        db.add(User(id="progress-owner", google_sub="progress-google", email="test@example.test", name="Test"))
+        cookie_response = Response()
+        await new_session(db, cookie_response, "progress-owner")
         db.add(Upload(
             id="progress-test", filename="recording.wav", storage_key="recording.wav",
-            status="transcribing", progress=0,
+            status="transcribing", progress=0, user_id="progress-owner",
         ))
         await db.commit()
 
@@ -106,6 +112,7 @@ async def test_chunk_progress_is_visible_to_polling_and_survives_failure(
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=main.app), base_url="http://test",
     ) as client:
+        client.cookies.extract_cookies(httpx.Response(200, headers={"set-cookie": cookie_response.headers["set-cookie"]}, request=httpx.Request("GET", "http://test")))
         async def fake_transcribe(audio_path, on_progress):
             await on_progress(50)
             # A separate API session must see progress before processing ends.

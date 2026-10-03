@@ -44,3 +44,8 @@ AsyncSessionLocal = async_sessionmaker(
 # Our database models will inherit from this class.
 class Base(DeclarativeBase):
     pass
+
+
+async def get_db():
+    async with AsyncSessionLocal() as session:
+        yield session

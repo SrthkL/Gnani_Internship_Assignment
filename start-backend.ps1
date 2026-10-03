@@ -20,6 +20,10 @@ Write-Host 'Keep this terminal open. Press Ctrl+C to stop.'
 # Resolve imports and local storage from the project, regardless of your shell's folder.
 Push-Location $backendDir
 try {
+    & $pythonPath -m app.init_db
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Database schema initialization failed. Check the error above.'
+    }
     # Windows reload uses a loop that cannot launch our FFmpeg subprocesses.
     & $pythonPath -m uvicorn main:app --app-dir $backendDir --host 127.0.0.1 --port $Port
     if ($LASTEXITCODE -ne 0) {

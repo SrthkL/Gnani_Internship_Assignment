@@ -2,12 +2,13 @@ import asyncio
 
 from app.db import Base, engine
 from app import models  # Register the Upload table with Base.metadata.
+from app.migrations import initialize_schema
 
 
 async def init_db():
     try:
         async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+            await initialize_schema(connection)
 
         print("Database tables created.")
     finally:

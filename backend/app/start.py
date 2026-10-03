@@ -11,6 +11,8 @@ from app.config import settings
 from app.db import Base, engine
 from app.health import check_storage
 from app.models import Upload
+from app.migrations import initialize_schema
+from app.auth import validate_auth_settings
 
 
 def validate_deployment() -> None:
@@ -23,6 +25,7 @@ def validate_deployment() -> None:
         raise RuntimeError("Set a valid LLM_BASE_URL before deploying")
     if endpoint.hostname.lower() in {"localhost", "127.0.0.1", "::1"}:
         raise RuntimeError("LLM_BASE_URL must point to a hosted service, not localhost")
+    validate_auth_settings()
 
 
 async def initialize() -> None:
@@ -30,7 +33,7 @@ async def initialize() -> None:
     try:
         await asyncio.to_thread(check_storage)
         async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+            await initialize_schema(connection)
             # A stopped in-process task cannot resume itself. Allow manual retry,
             # preserving completed transcripts, rather than leaving it stuck.
             # Only safe with one instance and a database dedicated to this app.

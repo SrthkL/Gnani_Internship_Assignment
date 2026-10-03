@@ -15,6 +15,14 @@ type RecentUpload = Upload & {
   filename: string;
 };
 
+type Session = {
+  user: { name: string; email: string } | null;
+  google_enabled: boolean;
+  guest_used: boolean;
+  guest_result_minutes: number;
+  guest_upload: Upload | null;
+};
+
 function ResultPanel({
   title,
   text,
@@ -120,6 +128,8 @@ function ResultPanel({
 }
 
 export default function Home() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [sessionError, setSessionError] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [upload, setUpload] = useState<Upload | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -134,6 +144,40 @@ export default function Home() {
     upload?.status === "transcribing" ||
     upload?.status === "summarizing";
   const isBusy = uploading || startingTranscription || isProcessing;
+  const guestLimitReached = !!session && !session.user && session.guest_used;
+
+  useEffect(() => {
+    const controller = new AbortController();
+    async function loadSession() {
+      try {
+        const response = await fetch("/api/auth/me", { cache: "no-store", signal: controller.signal });
+        if (!response.ok) throw new Error("Unable to start your session. Refresh to retry.");
+        const data: Session = await response.json();
+        if (controller.signal.aborted) return;
+        setSession(data);
+        if (!data.user && data.guest_upload) setUpload(data.guest_upload);
+        if (new URLSearchParams(window.location.search).has("auth_error")) {
+          setSessionError("Google sign-in was not completed. Please try again.");
+          window.history.replaceState(null, "", window.location.pathname);
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) setSessionError(error instanceof Error ? error.message : "Session unavailable.");
+      }
+    }
+    void loadSession();
+    return () => controller.abort();
+  }, []);
+
+  async function logout() {
+    try {
+      const response = await fetch("/api/auth/logout", { method: "POST" });
+      if (!response.ok) throw new Error("Could not sign out. Please retry.");
+      // Clear account results from the page as well as revoking the server session.
+      window.location.reload();
+    } catch (error) {
+      setSessionError(error instanceof Error ? error.message : "Could not sign out.");
+    }
+  }
   const transcriptionProgress = upload?.transcript ||
     upload?.status === "summarizing" || upload?.status === "completed"
     ? 100
@@ -161,6 +205,13 @@ export default function Home() {
         });
 
         if (!response.ok) {
+          if (response.status === 401 || response.status === 404) {
+            const data = await response.json().catch(() => null);
+            setUpload(null);
+            setError(typeof data?.detail === "string" ? data.detail : "Recording unavailable. Refresh to continue.");
+            active = false;
+            return;
+          }
           throw new Error("Could not retrieve processing status.");
         }
 
@@ -213,7 +264,7 @@ export default function Home() {
   }, [uploadId, shouldRefresh]);
 
   async function uploadAudio() {
-    if (!file || isBusy) return;
+    if (!file || isBusy || !session || guestLimitReached) return;
 
     setError("");
     setUpload(null);
@@ -254,6 +305,7 @@ export default function Home() {
       }
 
       setUpload({ id: data.id, status: data.status, progress: 0 });
+      if (!session.user) setSession({ ...session, guest_used: true });
     } catch (error) {
       setError(
         error instanceof Error ? error.message : "Upload failed. Try again.",
@@ -265,7 +317,7 @@ export default function Home() {
   }
 
   async function loadRecordings() {
-    if (loadingHistory) return;
+    if (loadingHistory || !session?.user) return;
 
     setLoadingHistory(true);
     setHistoryError("");
@@ -371,6 +423,33 @@ export default function Home() {
           </p>
         </header>
 
+        <section aria-label="Account" className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+          {session?.user ? (
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="font-medium">{session.user.name}</p>
+                <p className="mt-1 text-sm text-slate-400">Recordings are saved privately to your account.</p>
+              </div>
+              <button type="button" onClick={logout} disabled={isBusy} className="rounded-lg bg-slate-800 px-4 py-2 text-sm disabled:opacity-50">Sign out</button>
+            </div>
+          ) : (
+            <>
+              <p className="font-medium">Try one recording as a guest</p>
+              <p className="mt-2 text-sm text-slate-400">
+                Guest results are temporary and expire after {session?.guest_result_minutes ?? 60} minutes or a server restart.
+                Sign in before uploading to save recordings and see your history.
+              </p>
+              {session?.google_enabled ? (
+                <a href="/api/auth/google" className="mt-4 inline-block rounded-lg bg-white px-4 py-2 font-medium text-slate-950">Sign in with Google</a>
+              ) : (
+                <p className="mt-3 text-sm text-slate-400">{session ? "Google sign-in is awaiting configuration." : "Loading session…"}</p>
+              )}
+              {guestLimitReached && <p className="mt-3 text-sm text-amber-300">Your guest recording has been used. Sign in to upload more.</p>}
+            </>
+          )}
+          {sessionError && <p role="alert" className="mt-3 text-sm text-red-400">{sessionError}</p>}
+        </section>
+
         <form
           aria-busy={isBusy}
           onSubmit={(event) => {
@@ -388,7 +467,7 @@ export default function Home() {
             id="audio"
             type="file"
             accept=".wav,.mp3,.m4a,.flac,.ogg"
-            disabled={isBusy}
+            disabled={isBusy || !session || guestLimitReached}
             aria-describedby="formats"
             onChange={(event) => {
               setFile(event.target.files?.[0] ?? null);
@@ -404,7 +483,7 @@ export default function Home() {
 
           <button
             type="submit"
-            disabled={!file || isBusy}
+            disabled={!file || isBusy || !session || guestLimitReached}
             className="rounded-lg bg-sky-400 px-5 py-3 font-semibold text-slate-950 hover:bg-sky-300 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {uploading ? "Uploading…" : "Upload recording"}
@@ -423,7 +502,7 @@ export default function Home() {
               className="rounded-lg bg-emerald-400/10 p-4"
             >
               <p className="font-medium text-emerald-300">
-                Audio saved successfully.
+                {session?.user ? "Audio saved to your account." : "Guest audio ready for processing."}
               </p>
               <p className="mt-2 break-all text-xs text-slate-400">
                 Recording ID: {upload.id}
@@ -481,7 +560,7 @@ export default function Home() {
           )}
         </form>
 
-        <section
+        {session?.user && <section
           aria-labelledby="history-heading"
           aria-busy={loadingHistory}
           className="rounded-2xl border border-slate-800 bg-slate-900 p-6"
@@ -546,7 +625,7 @@ export default function Home() {
               </li>
             ))}
           </ul>
-        </section>
+        </section>}
 
         {upload?.transcript && (
           <ResultPanel

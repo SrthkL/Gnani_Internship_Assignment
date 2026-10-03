@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import BACKEND_DIR, settings
-from app.models import Upload
+from app.models import Upload, User, BrowserSession
 
 
 def check_storage() -> None:
@@ -26,6 +26,8 @@ async def check_readiness(db: AsyncSession) -> None:
         # LIMIT 0 verifies all mapped columns without reading recordings.
         async with asyncio.timeout(10):
             await db.execute(select(Upload).limit(0))
+            await db.execute(select(User).limit(0))
+            await db.execute(select(BrowserSession).limit(0))
             await asyncio.to_thread(check_storage)
     except Exception:
         # Connection errors can contain credentials; keep them out of responses.

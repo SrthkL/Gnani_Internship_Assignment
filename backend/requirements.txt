@@ -50,6 +50,8 @@ python-multipart==0.0.32
 sqlalchemy==2.1.1
     # via -r requirements.in
 starlette==1.7.0
+Authlib==1.7.2
+itsdangerous==2.2.0
     # via fastapi
 typing-extensions==4.16.0
     # via

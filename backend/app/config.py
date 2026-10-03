@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     LLM_MODEL: str = "llama3.2:3b"
     LLM_API_KEY: SecretStr = SecretStr("")
     LLM_TIMEOUT_SECONDS: int = 180
+    APP_URL: str = "http://localhost:3000"
+    AUTH_SECRET: SecretStr = SecretStr("")
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: SecretStr = SecretStr("")
+    SESSION_HOURS: int = 24
+    GUEST_RESULT_MINUTES: int = 60
 
     model_config = SettingsConfigDict(
         env_file=BACKEND_DIR / ".env",
