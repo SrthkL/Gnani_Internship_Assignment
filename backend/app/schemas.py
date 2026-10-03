@@ -19,3 +19,4 @@ class UploadDetail(UploadResponse):
     filename: str
     transcript: str | None = None
     created_at: datetime
+    progress: int = 0

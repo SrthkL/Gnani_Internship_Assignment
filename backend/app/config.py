@@ -10,6 +10,10 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     STORAGE_DIR: str = str(BACKEND_DIR / "storage")
     AUDIO_CHUNK_SECONDS: int = 240
+    GNANI_API_KEY: str = ""
+    GNANI_BASE_URL: str = "https://api.vachana.ai"
+    GNANI_LANGUAGE: str = "en-IN"
+    GNANI_POLL_SECONDS: int = 10
 
     model_config = SettingsConfigDict(
         env_file=BACKEND_DIR / ".env",
