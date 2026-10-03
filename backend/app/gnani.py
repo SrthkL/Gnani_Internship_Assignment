@@ -21,13 +21,13 @@ def _retry_delay(response: httpx.Response, attempt: int) -> float:
     retry_after = response.headers.get("Retry-After")
     if retry_after:
         try:
-            return max(10, float(retry_after))
+            return min(60, max(10, float(retry_after)))
         except ValueError:
             try:
                 deadline = parsedate_to_datetime(retry_after)
                 if deadline.tzinfo is None:
                     deadline = deadline.replace(tzinfo=timezone.utc)
-                return max(10, (deadline - datetime.now(timezone.utc)).total_seconds())
+                return min(60, max(10, (deadline - datetime.now(timezone.utc)).total_seconds()))
             except (ValueError, TypeError, OverflowError):
                 pass
     return min(60, 10 * (2 ** attempt))

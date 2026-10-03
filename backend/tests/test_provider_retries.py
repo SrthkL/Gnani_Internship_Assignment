@@ -4,6 +4,12 @@ import pytest
 from app import gnani
 
 
+@pytest.mark.parametrize("retry_after,expected", [("999999", 60), ("17", 17), ("-1", 10), ("invalid", 10)])
+def test_provider_retry_delay_is_bounded(retry_after, expected):
+    response = httpx.Response(429, headers={"Retry-After": retry_after})
+    assert gnani._retry_delay(response, 0) == expected
+
+
 @pytest.mark.asyncio
 async def test_rate_limited_upload_rewinds_audio_and_honors_retry_after(monkeypatch, tmp_path):
     audio = tmp_path / "chunk.wav"

@@ -16,7 +16,7 @@ from app.config import BACKEND_DIR, settings
 from app.tasks import process_upload
 from app.health import check_readiness
 from app.auth import router as auth_router, current_session, require_user, check_origin, validate_auth_settings
-from app.guests import cleanup_loop, get_guest, save_guest, process_guest
+from app.guests import cleanup_loop, cleanup_guests, get_guest, save_guest, process_guest
 
 @asynccontextmanager
 async def lifespan(app):
@@ -51,6 +51,9 @@ async def private_responses(request, call_next):
     response = await call_next(request)
     if request.url.path.startswith(("/uploads", "/auth")):
         response.headers["Cache-Control"] = "no-store"
+    if request.url.path == "/auth/google/callback":
+        # Uvicorn logs the scope after this response; omit OAuth codes/state.
+        request.scope["query_string"] = b""
     return response
 
 
@@ -96,15 +99,25 @@ async def create_upload(
         )
         if reserved.rowcount != 1:
             raise HTTPException(403, "Your guest recording has been used. Sign in to upload more and save history.")
+        guest = None
         try:
             guest = await save_guest(file, upload_id, session.token_hash)
             await db.commit()
-        except Exception:
+        except Exception as error:
             await db.rollback()
-            raise
+            if guest is not None:
+                from app.auth import now
+                guest.expires_at = now()
+                await cleanup_guests()
+            if isinstance(error, HTTPException):
+                raise
+            raise HTTPException(503, "Audio storage or database is unavailable. Please retry.") from None
         return UploadResponse(id=guest.id, status=guest.status)
 
-    storage_key = await save_audio(file, upload_id)
+    try:
+        storage_key = await save_audio(file, upload_id)
+    except OSError:
+        raise HTTPException(503, "Audio storage is unavailable. Please retry.") from None
 
     #upload means saved not yet transcribed
     upload = Upload(
@@ -116,7 +129,15 @@ async def create_upload(
     )
 
     db.add(upload)
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        storage_dir = Path(settings.STORAGE_DIR)
+        if not storage_dir.is_absolute():
+            storage_dir = BACKEND_DIR / storage_dir
+        await asyncio.to_thread((storage_dir / storage_key).unlink, missing_ok=True)
+        raise HTTPException(503, "Database is unavailable. Please retry.") from None
 
     return UploadResponse(
         id=upload.id,

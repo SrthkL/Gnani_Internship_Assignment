@@ -285,6 +285,14 @@ export default function Home() {
       setError("Choose an audio file that isn't empty.");
       return;
     }
+    if (file.size > 50 * 1024 * 1024) {
+      setError("Choose an audio file up to 50 MB.");
+      return;
+    }
+    if (!/\.(wav|mp3|m4a|flac|ogg)$/i.test(file.name)) {
+      setError("Choose a WAV, MP3, M4A, FLAC or OGG audio file.");
+      return;
+    }
 
     setUploading(true);
 
@@ -462,7 +470,7 @@ export default function Home() {
             </div>
             {session?.user ? <button type="button" onClick={logout} disabled={isBusy} className="secondary-button">Sign out</button>
               : session?.google_enabled ? <a href="/api/auth/google" className="google-button"><span aria-hidden="true">G</span>Sign in with Google</a>
-                : <span className="session-status">{session ? "Google sign-in awaits configuration." : "Loading session…"}</span>}
+                : <span className="session-status">{session ? "Google sign-in awaits configuration." : sessionError ? "Session unavailable. Refresh to retry." : "Loading session…"}</span>}
           </section>
 
           <form aria-busy={isBusy} onSubmit={(event) => { event.preventDefault(); void uploadAudio(); }} className="upload-card">

@@ -22,7 +22,7 @@ def failure_message(error: Exception, stage: str) -> str:
         if code in {401, 403}:
             return f"{service} rejected authentication or access (HTTP {code}). Check its configuration."
         return f"{service} request failed (HTTP {code}). Please retry."
-    if isinstance(error, httpx.TimeoutException):
+    if isinstance(error, (httpx.TimeoutException, TimeoutError)):
         return f"{service} timed out. Please retry."
     if isinstance(error, httpx.TransportError):
         return f"Could not reach the {service.lower()}. Check that it is available."
@@ -30,6 +30,10 @@ def failure_message(error: Exception, stage: str) -> str:
         return "The original recording is missing. Please upload it again."
     if isinstance(error, NotImplementedError):
         return "Audio conversion could not start. Run the Windows backend without --reload."
+    if isinstance(error, ValueError) and str(error) in {
+        "Audio could not be decoded", "Audio produced no usable chunks",
+    }:
+        return "This recording could not be decoded. Please upload a valid audio file."
     return f"{stage.capitalize()} failed ({type(error).__name__}). Check the backend log."
 
 
@@ -93,29 +97,3 @@ async def process_upload(upload_id: str) -> None:
                 upload_id,
                 failure_message(error, stage),
             )
-
-def split_transcript(text: str, max_bytes: int = 3000) -> list[str]:
-    """Split text into bounded pieces without dropping Unicode characters."""
-
-    if max_bytes < 4:
-        raise ValueError("Chunk limit must accommodate a UTF-8 character")
-
-    chunks = []
-    characters = []
-    current_bytes = 0
-
-    for character in text:
-        character_bytes = len(character.encode("utf-8"))
-
-        if current_bytes + character_bytes > max_bytes:
-            chunks.append("".join(characters))
-            characters = []
-            current_bytes = 0
-
-        characters.append(character)
-        current_bytes += character_bytes
-
-    if characters:
-        chunks.append("".join(characters))
-
-    return chunks

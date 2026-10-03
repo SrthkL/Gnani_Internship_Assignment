@@ -102,7 +102,7 @@ async def me(request: Request, response: Response, db: AsyncSession = Depends(ge
     except HTTPException:
         session = await new_session(db, response)
     user = await db.get(User, session.user_id) if session.user_id else None
-    guest = next((job for job in guest_jobs.values() if job.session_hash == session.token_hash and job.expires_at > now()), None)
+    guest = next((job for job in guest_jobs.values() if job.session_hash == session.token_hash and (job.expires_at > now() or job.status in {"transcribing", "summarizing"})), None)
     response.headers["Cache-Control"] = "no-store"
     return {
         "user": {"name": user.name, "email": user.email} if user else None,

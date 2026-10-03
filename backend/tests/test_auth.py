@@ -10,7 +10,7 @@ import pytest_asyncio
 from fastapi import Response
 from sqlalchemy import func, select, text
 from pydantic import SecretStr
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import main
 from app import auth, guests, tasks
@@ -188,6 +188,59 @@ async def test_invalid_upload_does_not_use_guest_allowance(api):
     assert (await browser.post("/uploads", files={"file": ("notes.txt", b"not audio")})).status_code == 415
     assert (await browser.post("/uploads", files={"file": ("empty.wav", b"")})).status_code == 413
     assert (await upload(browser)).status_code == 201
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size,expected", [(10 * 1024 * 1024 + 1, 201), (50 * 1024 * 1024, 201), (50 * 1024 * 1024 + 1, 413)])
+async def test_upload_file_size_boundary(api, size, expected):
+    client, _ = api
+    browser = await client()
+    response = await browser.post("/uploads", files={"file": ("limit.flac", b"a" * size, "audio/flac")})
+    assert response.status_code == expected
+    assert (await browser.get("/auth/me")).json()["guest_used"] is (expected == 201)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("account", [False, True])
+async def test_storage_failure_is_safe_and_does_not_use_guest_allowance(api, monkeypatch, account):
+    client, _ = api
+    browser = await client("storage-owner" if account else None)
+    saver = "save_audio" if account else "save_guest"
+    with monkeypatch.context() as patch:
+        patch.setattr(main, saver, AsyncMock(side_effect=PermissionError("private storage path")))
+        response = await upload(browser)
+    assert response.status_code == 503
+    assert "private storage path" not in response.text
+    if not account:
+        assert (await browser.get("/auth/me")).json()["guest_used"] is False
+    assert (await upload(browser)).status_code == 201
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("account", [False, True])
+async def test_database_save_failure_removes_orphaned_audio(api, monkeypatch, account):
+    client, _ = api
+    browser = await client("database-owner" if account else None)
+    with monkeypatch.context() as patch:
+        patch.setattr(AsyncSession, "commit", AsyncMock(side_effect=RuntimeError("private database URL")))
+        response = await upload(browser)
+    assert response.status_code == 503
+    assert "private database URL" not in response.text
+    assert not guests.guest_jobs
+    assert not list(Path(settings.STORAGE_DIR).glob("audio/*"))
+    assert (await upload(browser)).status_code == 201
+
+
+@pytest.mark.asyncio
+async def test_session_restores_active_guest_job_even_after_initial_expiry(api):
+    client, _ = api
+    browser = await client()
+    job_id = (await upload(browser)).json()["id"]
+    job = guests.guest_jobs[job_id]
+    job.status = "transcribing"
+    job.expires_at = auth.now() - timedelta(minutes=1)
+    result = (await browser.get("/auth/me")).json()
+    assert result["guest_upload"]["id"] == job_id
 
 
 @pytest.mark.asyncio

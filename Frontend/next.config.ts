@@ -6,6 +6,10 @@ const backendUrl = (
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  experimental: {
+    // Allow a 50 MiB audio file plus multipart headers through the rewrite.
+    proxyClientMaxBodySize: "55mb",
+  },
   async rewrites() {
     return [
       {

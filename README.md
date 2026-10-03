@@ -66,10 +66,8 @@ Check `http://localhost:3000/api/live` for `{"status":"ok"}`.
 If the frontend is already running, leave that terminal open instead of
 starting a second copy.
 
-See [deployment setup](DEPLOYMENT.md) for Railway configuration, production
-containers, persistent storage, and deployment limitations. See
-[transcription retry fixes](backend/TRANSCRIPTION_RETRY_FIX.md) for provider
-error handling and recovery.
+See [architecture](architecture.md) for the Railway services, provider flow,
+persistent storage, and deployment limitations.
 
 ## Initial goal
 
@@ -115,6 +113,5 @@ Keep actual credentials, personal recordings, and generated files out of Git.
 
 ## Later features
 
-Speaker diarization, cloud object storage, authentication, and a durable worker
-queue are later milestones. Deployment configuration is available in
-[DEPLOYMENT.md](DEPLOYMENT.md).
+Speaker diarization, cloud object storage, and a durable worker queue are
+later milestones. Google authentication and private recording history are implemented.
