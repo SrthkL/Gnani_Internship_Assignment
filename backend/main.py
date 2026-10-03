@@ -101,10 +101,12 @@ async def transcribe_upload(
     if upload is None:
         raise HTTPException(404, "Upload not found")
 
-    if upload.status == "completed" and upload.transcript:
+    if upload.status == "completed" and upload.transcript and upload.summary:
         response.status_code = 200
         return UploadResponse(id=upload.id, status=upload.status)
 
+    if upload.status in {"transcribing", "summarizing"}:
+        raise HTTPException(409, "Recording is already being processed")
     if upload.status == "transcribing":
         raise HTTPException(409, "Recording is already being transcribed")
 
@@ -143,3 +145,4 @@ async def list_uploads(
         UploadDetail.model_validate(upload)
         for upload in uploads
     ]
+

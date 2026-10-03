@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     GNANI_BASE_URL: str = "https://api.vachana.ai"
     GNANI_LANGUAGE: str = "en-IN"
     GNANI_POLL_SECONDS: int = 10
+    LLM_BASE_URL: str = "http://localhost:11434/v1"
+    LLM_MODEL: str = "llama3.2:3b"
+    LLM_TIMEOUT_SECONDS: int = 180
 
     model_config = SettingsConfigDict(
         env_file=BACKEND_DIR / ".env",

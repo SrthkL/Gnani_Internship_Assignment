@@ -37,3 +37,7 @@ class Upload(Base):
         server_default=func.now(),
         nullable=False,
     )
+    summary: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
