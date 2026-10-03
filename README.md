@@ -1,7 +1,32 @@
 # Gnani Internship Assignment
 
-A local audio transcription backend built incrementally with FastAPI,
-PostgreSQL, and the Gnani batch transcription API.
+A local audio notes project built incrementally with a FastAPI backend,
+PostgreSQL, the Gnani batch transcription API, and a Next.js frontend.
+
+## Start the project
+
+Open two PowerShell terminals. These scripts locate the project themselves,
+so your terminal's current directory does not matter.
+
+Backend terminal:
+
+```powershell
+& "C:\Users\capta\Gnani_Internship_Assignment\start-backend.ps1"
+```
+
+Frontend terminal:
+
+```powershell
+& "C:\Users\capta\Gnani_Internship_Assignment\start-frontend.ps1"
+```
+
+Keep both terminals open. Open `http://localhost:3000` for the upload page.
+Check `http://localhost:3000/api/live` for `{"status":"ok"}`.
+If the frontend is already running, leave that terminal open instead of
+starting a second copy.
+
+See [local development and startup fixes](docs/local-development.md) for
+configuration, annotated commands, troubleshooting, and verification results.
 
 ## Initial goal
 
@@ -24,13 +49,18 @@ reporting, and recovery of interrupted jobs.
 
 - Git and Git Bash on Windows.
 - Python 3.12 and uv for virtual environments and dependency locking.
-- A running local PostgreSQL development database.
+- Node.js LTS and npm for the frontend.
+- A reachable PostgreSQL database configured by `backend/.env`.
 - Gnani credentials for deliberate live transcription checks.
 - FFmpeg when audio normalization and chunking are introduced.
 
-This repository currently contains the project scope and ignore rules.
-Dependency installation and application launch commands will be added with
-the milestones that implement them.
+The backend virtual environment is `backend/.venv`. Its activation prompt
+may say `backend`; this does not change the environment's directory name.
+The frontend dependencies are installed separately in `Frontend/node_modules`.
+
+The frontend currently uploads recordings and displays the returned recording
+ID. Transcription and summary endpoints are available in the backend; connecting
+those controls to the frontend is the next interface milestone.
 
 ## Development workflow
 
@@ -42,6 +72,5 @@ Keep actual credentials, personal recordings, and generated files out of Git.
 
 ## Later features
 
-LLM summaries, speaker diarization, cloud object storage, deployment,
-authentication, and frontend integration follow the local transcription
-milestone. They are not required for the initial implementation.
+Frontend transcription controls, speaker diarization, cloud object storage,
+deployment, authentication, and durable job recovery are later milestones.
