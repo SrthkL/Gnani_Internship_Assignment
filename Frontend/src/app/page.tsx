@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 
 type Upload = {
   id: string;
   status: string;
+  filename?: string;
   progress?: number;
   transcript?: string | null;
   summary?: string | null;
@@ -22,6 +24,14 @@ type Session = {
   guest_result_minutes: number;
   guest_upload: Upload | null;
 };
+
+function AudioMark({ large = false }: { large?: boolean }) {
+  return (
+    <svg width={large ? 48 : 22} height={large ? 48 : 22} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+      <path d="M3 10v4M7.5 6v12M12 3v18M16.5 7v10M21 10v4" />
+    </svg>
+  );
+}
 
 function ResultPanel({
   title,
@@ -90,17 +100,17 @@ function ResultPanel({
   return (
     <section
       aria-labelledby={headingId}
-      className="rounded-2xl border border-slate-800 bg-slate-900 p-6"
+      className="result-panel"
     >
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h2 id={headingId} className="text-xl font-semibold">{title}</h2>
-        <div className="flex gap-2">
+      <div className="result-toolbar">
+        <h2 id={headingId}>{title}</h2>
+        <div className="result-actions">
           <button
             type="button"
             onClick={copyText}
             disabled={copying}
             aria-label={`Copy ${title.toLowerCase()}`}
-            className="rounded-lg bg-slate-800 px-3 py-2 text-sm hover:bg-slate-700 disabled:opacity-50"
+            className="secondary-button"
           >
             {copying ? "Copying…" : "Copy"}
           </button>
@@ -108,7 +118,7 @@ function ResultPanel({
             type="button"
             onClick={downloadText}
             aria-label={`Download ${title.toLowerCase()} as text`}
-            className="rounded-lg bg-slate-800 px-3 py-2 text-sm hover:bg-slate-700"
+            className="secondary-button"
           >
             Download .txt
           </button>
@@ -117,17 +127,18 @@ function ResultPanel({
       {feedback && (
         <p
           role={feedback.failed ? "alert" : "status"}
-          className={`mb-4 text-sm ${feedback.failed ? "text-red-400" : "text-emerald-300"}`}
+          className={feedback.failed ? "error-message" : "success-message"}
         >
           {feedback.message}
         </p>
       )}
-      <p className="whitespace-pre-wrap leading-7 text-slate-300">{text}</p>
+      <p className="result-prose">{text}</p>
     </section>
   );
 }
 
 export default function Home() {
+  const [resultTab, setResultTab] = useState<"Summary" | "Transcript">("Summary");
   const [session, setSession] = useState<Session | null>(null);
   const [sessionError, setSessionError] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -226,6 +237,7 @@ export default function Home() {
         setUpload({
           id: data.id,
           status: data.status,
+          filename: typeof data.filename === "string" ? data.filename : undefined,
           progress: typeof data.progress === "number" && Number.isFinite(data.progress)
             ? data.progress : 0,
           transcript:
@@ -304,7 +316,7 @@ export default function Home() {
         throw new Error("The server returned an unexpected response.");
       }
 
-      setUpload({ id: data.id, status: data.status, progress: 0 });
+      setUpload({ id: data.id, status: data.status, progress: 0, filename: file.name });
       if (!session.user) setSession({ ...session, guest_used: true });
     } catch (error) {
       setError(
@@ -409,242 +421,101 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-950 px-6 py-16 text-slate-100">
-      <div className="mx-auto max-w-2xl space-y-8">
-        <header>
-          <p className="mb-3 text-sm font-medium text-sky-400">
-            Audio Notes
-          </p>
-          <h1 className="text-4xl font-semibold tracking-tight">
-            Turn conversations into clear notes.
-          </h1>
-          <p className="mt-4 text-slate-400">
-            Upload a recording to begin.
-          </p>
+    <div className="sonora-shell">
+      <aside className="sidebar" aria-label="Workspace navigation">
+        <Link className="brand" href="/" aria-label="Sonora home">
+          <span className="brand-mark"><AudioMark /></span>
+          sonora<span className="brand-dot">.</span>
+        </Link>
+        <p className="brand-credit">BY GNANI.AI</p>
+        <p className="nav-label">YOUR WORKSPACE</p>
+        <a className="nav-item current" href="#workspace" aria-current="page">
+          <AudioMark /> Audio notes
+          {session?.user && recordings && <span className="nav-count">{recordings.length}</span>}
+        </a>
+        <div className="sidebar-note"><span className="little-line" /><p>A little clarity,<br />every day.</p></div>
+        <div className="sidebar-account">
+          <span className="avatar">{session?.user?.name.charAt(0).toUpperCase() || "S"}</span>
+          <div><strong>{session?.user ? "Personal workspace" : "Guest workspace"}</strong><small>{session?.user ? "Your notes, just for you." : "One conversation to get started."}</small></div>
+        </div>
+      </aside>
+
+      <div className="main-column">
+        <header className="topbar">
+          <span className="mobile-brand">sonora<span>.</span></span>
+          <span className="breadcrumb">Workspace <span>/</span> <strong>Audio notes</strong></span>
+          <span className="privacy-label"><span />{session?.user ? "Private workspace" : "A little clarity starts here"}</span>
         </header>
 
-        <section aria-label="Account" className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-          {session?.user ? (
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <p className="font-medium">{session.user.name}</p>
-                <p className="mt-1 text-sm text-slate-400">Recordings are saved privately to your account.</p>
-              </div>
-              <button type="button" onClick={logout} disabled={isBusy} className="rounded-lg bg-slate-800 px-4 py-2 text-sm disabled:opacity-50">Sign out</button>
-            </div>
-          ) : (
-            <>
-              <p className="font-medium">Try one recording as a guest</p>
-              <p className="mt-2 text-sm text-slate-400">
-                Guest results are temporary and expire after {session?.guest_result_minutes ?? 60} minutes or a server restart.
-                Sign in before uploading to save recordings and see your history.
-              </p>
-              {session?.google_enabled ? (
-                <a href="/api/auth/google" className="mt-4 inline-block rounded-lg bg-white px-4 py-2 font-medium text-slate-950">Sign in with Google</a>
-              ) : (
-                <p className="mt-3 text-sm text-slate-400">{session ? "Google sign-in is awaiting configuration." : "Loading session…"}</p>
-              )}
-              {guestLimitReached && <p className="mt-3 text-sm text-amber-300">Your guest recording has been used. Sign in to upload more.</p>}
-            </>
-          )}
-          {sessionError && <p role="alert" className="mt-3 text-sm text-red-400">{sessionError}</p>}
-        </section>
-
-        <form
-          aria-busy={isBusy}
-          onSubmit={(event) => {
-            event.preventDefault();
-            void uploadAudio();
-          }}
-          className="space-y-5 rounded-2xl border border-slate-800 bg-slate-900 p-6"
-        >
-          <label htmlFor="audio" className="block font-medium">
-            Choose your recording
-          </label>
-
-          <input
-            ref={audioInputRef}
-            id="audio"
-            type="file"
-            accept=".wav,.mp3,.m4a,.flac,.ogg"
-            disabled={isBusy || !session || guestLimitReached}
-            aria-describedby="formats"
-            onChange={(event) => {
-              setFile(event.target.files?.[0] ?? null);
-              setUpload(null);
-              setError("");
-            }}
-            className="block w-full text-sm file:mr-4 file:rounded-lg file:border-0 file:bg-slate-800 file:px-4 file:py-3 file:text-slate-100"
-          />
-
-          <p id="formats" className="text-sm text-slate-400">
-            WAV, MP3, M4A, FLAC or OGG
-          </p>
-
-          <button
-            type="submit"
-            disabled={!file || isBusy || !session || guestLimitReached}
-            className="rounded-lg bg-sky-400 px-5 py-3 font-semibold text-slate-950 hover:bg-sky-300 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {uploading ? "Uploading…" : "Upload recording"}
-          </button>
-
-          {error && (
-            <p role="alert" className="text-sm text-red-400">
-              {error}
-            </p>
-          )}
-
-          {upload && (
-
-            <div
-              role="status"
-              className="rounded-lg bg-emerald-400/10 p-4"
-            >
-              <p className="font-medium text-emerald-300">
-                {session?.user ? "Audio saved to your account." : "Guest audio ready for processing."}
-              </p>
-              <p className="mt-2 break-all text-xs text-slate-400">
-                Recording ID: {upload.id}
-              </p>
-              <p className="mt-3 text-sm text-slate-300">
-                  Status: {upload.status}
-              </p>
-              <div className="mt-4">
-                <div className="mb-2 flex items-center justify-between text-sm">
-                  <span id="transcription-progress-label">Transcription progress</span>
-                  <span className="tabular-nums">{transcriptionProgress}%</span>
-                </div>
-                <div
-                  role="progressbar"
-                  aria-labelledby="transcription-progress-label"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={transcriptionProgress}
-                  className="h-2 overflow-hidden rounded-full bg-slate-800"
-                >
-                  <div
-                    style={{ width: `${transcriptionProgress}%` }}
-                    className="h-full rounded-full bg-sky-400 transition-[width] duration-300 motion-reduce:transition-none"
-                  />
-                </div>
-                <p className="mt-2 text-xs text-slate-400">
-                  {upload.status === "summarizing"
-                    ? "Transcription complete. Generating summary…"
-                    : upload.status === "completed"
-                      ? "Transcription and summary complete."
-                      : upload.status === "failed"
-                        ? "Processing stopped. You can retry."
-                        : upload.status === "uploaded"
-                          ? "Ready to start transcription."
-                          : "Updates after each audio chunk is transcribed."}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={startTranscription}
-                disabled={
-                  isBusy ||
-                  !["uploaded", "failed"].includes(upload.status)
-                }
-                className="mt-4 rounded-lg bg-sky-400 px-4 py-2 font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {startingTranscription
-                  ? "Starting…"
-                  : upload.status === "failed"
-                    ? "Retry processing"
-                    : "Start transcription"}
-              </button>
-
-            </div>
-          )}
-        </form>
-
-        {session?.user && <section
-          aria-labelledby="history-heading"
-          aria-busy={loadingHistory}
-          className="rounded-2xl border border-slate-800 bg-slate-900 p-6"
-        >
-          <div className="flex items-center justify-between gap-4">
-            <h2 id="history-heading" className="text-xl font-semibold">
-              Recent recordings
-            </h2>
-            <button
-              type="button"
-              onClick={loadRecordings}
-              disabled={loadingHistory}
-              className="rounded-lg bg-slate-800 px-4 py-2 text-sm hover:bg-slate-700 disabled:opacity-50"
-            >
-              {loadingHistory
-                ? "Loading…"
-                : recordings === null
-                  ? "Load recordings"
-                  : "Refresh recordings"}
-            </button>
+        <main className="workspace-main" id="workspace">
+          <div className="page-heading">
+            <div><p className="eyebrow">LISTEN LESS. REMEMBER MORE.</p><h1>Make room for the good ideas<span>.</span></h1><p className="subtitle">Turn your conversations into notes you can actually use.</p></div>
+            <div className="heading-art"><AudioMark large /></div>
           </div>
 
-          {historyError && (
-            <p role="alert" className="mt-4 text-sm text-red-400">
-              {historyError}
-            </p>
-          )}
+          <section aria-label="Account" className="account-banner">
+            <div>
+              <p className="account-title">{session?.user ? session.user.name : "Your first conversation is on us."}</p>
+              <p className="account-description">{session?.user ? "Your recordings, transcripts and summaries are saved privately." : `Try one recording as a guest. Results stay temporary for ${session?.guest_result_minutes ?? 60} minutes; sign in before uploading to save your notes.`}</p>
+              {guestLimitReached && <p className="limit-message">Your guest recording has been used. Sign in to upload more.</p>}
+              {sessionError && <p role="alert" className="error-message">{sessionError}</p>}
+            </div>
+            {session?.user ? <button type="button" onClick={logout} disabled={isBusy} className="secondary-button">Sign out</button>
+              : session?.google_enabled ? <a href="/api/auth/google" className="google-button"><span aria-hidden="true">G</span>Sign in with Google</a>
+                : <span className="session-status">{session ? "Google sign-in awaits configuration." : "Loading session…"}</span>}
+          </section>
 
-          {recordings === null && !historyError && (
-            <p className="mt-4 text-sm text-slate-400">
-              Load your recordings to reopen saved transcripts and summaries.
-            </p>
-          )}
+          <form aria-busy={isBusy} onSubmit={(event) => { event.preventDefault(); void uploadAudio(); }} className="upload-card">
+            <div className="upload-icon" aria-hidden="true"><svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 16V3m-5 5 5-5 5 5M4 15v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5" /></svg></div>
+            <div className="upload-copy">
+              <h2>{file ? file.name : "Every great note starts with a conversation."}</h2>
+              <p>{file ? `${(file.size / 1048576).toFixed(1)} MB · Ready to turn into notes` : "Choose an audio file from your device to get started."}</p>
+              <small id="formats">WAV, MP3, M4A, FLAC or OGG <span>·</span> Up to 50 MB</small>
+              <label className="file-picker" htmlFor="audio">Choose your recording
+                <input ref={audioInputRef} id="audio" type="file" accept=".wav,.mp3,.m4a,.flac,.ogg" disabled={isBusy || !session || guestLimitReached} aria-describedby="formats"
+                  onChange={(event) => { setFile(event.target.files?.[0] ?? null); setUpload(null); setResultTab("Summary"); setError(""); }} />
+              </label>
+            </div>
+            <button type="submit" disabled={!file || isBusy || !session || guestLimitReached} className="primary-button">{uploading ? "Uploading…" : "Upload recording"}<span aria-hidden="true">↗</span></button>
+          </form>
+          {error && <p role="alert" className="error-banner">{error}</p>}
 
-          {recordings?.length === 0 && (
-            <p className="mt-4 text-sm text-slate-400">No recordings yet.</p>
-          )}
+          <div className="section-heading"><h2>Your audio notes</h2><span>Less searching. More remembering.</span></div>
+          <div className="notes-workspace">
+            <section aria-labelledby="history-heading" aria-busy={loadingHistory} className="history-panel">
+              <div className="history-heading"><h2 id="history-heading">{session?.user ? "Recent recordings" : "Your workspace"}</h2>{session?.user && <button type="button" onClick={loadRecordings} disabled={loadingHistory} className="text-button">{loadingHistory ? "Loading…" : recordings === null ? "Load recordings" : "Refresh recordings"}</button>}</div>
+              {session?.user ? <>
+                {historyError && <p role="alert" className="history-hint error-message">{historyError}</p>}
+                {recordings === null && !historyError && <p className="history-hint">Load your recordings to pick up where you left off.</p>}
+                {recordings?.length === 0 && <p className="history-hint">Your notes will appear here after your first upload.</p>}
+                <ul className="recording-list">{recordings?.map((recording) => <li key={recording.id}><button type="button" disabled={isBusy} aria-current={upload?.id === recording.id ? "true" : undefined}
+                  className={`recording-item ${upload?.id === recording.id ? "selected" : ""}`}
+                  onClick={() => { setFile(null); if (audioInputRef.current) audioInputRef.current.value = ""; setUpload(recording); setResultTab("Summary"); setError(recording.status === "failed" ? recording.error_message || "Processing failed. You can retry processing." : ""); }}>
+                  <span className="recording-icon"><AudioMark /></span><span className="recording-info"><strong>{recording.filename}</strong><span className={`status-badge ${recording.status}`}>{recording.status}</span></span>
+                </button></li>)}</ul>
+              </> : <div className="guest-history"><span className="lock-icon" aria-hidden="true">◇</span><h3>Keep the good ideas.</h3><p>Sign in to build a personal library of transcripts and summaries.</p>{session?.google_enabled && <a className="text-button" href="/api/auth/google">Save notes with Google <span aria-hidden="true">↗</span></a>}</div>}
+              <p className="history-footer">{session?.user ? "Only you can access your saved notes." : "Guest notes aren't added to history."}</p>
+            </section>
 
-          <ul className="mt-4 space-y-3">
-            {recordings?.map((recording) => (
-              <li key={recording.id}>
-                <button
-                  type="button"
-                  disabled={isBusy}
-                  aria-current={upload?.id === recording.id ? "true" : undefined}
-                  onClick={() => {
-                    // Clear the previous file selection when reopening a saved recording.
-                    setFile(null);
-                    if (audioInputRef.current) audioInputRef.current.value = "";
-                    setUpload(recording);
-                    setError(
-                      recording.status === "failed"
-                        ? recording.error_message || "Processing failed. You can retry processing."
-                        : "",
-                    );
-                  }}
-                  className="w-full rounded-lg border border-slate-700 p-4 text-left hover:border-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <p className="break-words font-medium">{recording.filename}</p>
-                  <p className="mt-1 text-sm text-slate-400">{recording.status}</p>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>}
-
-        {upload?.transcript && (
-          <ResultPanel
-            key={`transcript-${upload.id}`}
-            title="Transcript"
-            text={upload.transcript}
-            filename={`transcript-${upload.id}.txt`}
-          />
-        )}
-
-        {upload?.summary && (
-          <ResultPanel
-            key={`summary-${upload.id}`}
-            title="Summary"
-            text={upload.summary}
-            filename={`summary-${upload.id}.txt`}
-          />
-        )}
+            <section className="detail-panel" aria-label="Recording workspace">
+              {upload ? <>
+                <div className="detail-heading"><p className="eyebrow">YOUR CONVERSATION, MADE CLEAR</p><h2>{upload.filename || file?.name || "Your recording"}</h2><span className={`status-badge ${upload.status}`}>{upload.status}</span></div>
+                <div className="processing-card">
+                  <div className="progress-label"><span id="transcription-progress-label">Transcription progress</span><strong>{transcriptionProgress}%</strong></div>
+                  <div role="progressbar" aria-labelledby="transcription-progress-label" aria-valuemin={0} aria-valuemax={100} aria-valuenow={transcriptionProgress} className="progress-track"><div style={{ width: `${transcriptionProgress}%` }} className="progress-fill" /></div>
+                  <p>{upload.status === "summarizing" ? "Transcription complete. Generating summary…" : upload.status === "completed" ? "Transcription and summary complete." : upload.status === "failed" ? "Processing stopped. You can retry." : upload.status === "uploaded" ? "Ready to start transcription." : "Updates after each audio chunk is transcribed."}</p>
+                  {["uploaded", "failed"].includes(upload.status) && <button type="button" onClick={startTranscription} disabled={isBusy} className="primary-button">{startingTranscription ? "Starting…" : upload.status === "failed" ? "Retry processing" : "Start transcription"}<span aria-hidden="true">→</span></button>}
+                </div>
+                <div className="result-tabs" role="tablist" aria-label="Recording results">{(["Summary", "Transcript"] as const).map((tab) => <button key={tab} id={`tab-${tab.toLowerCase()}`} role="tab" type="button" aria-selected={resultTab === tab} aria-controls="recording-result" tabIndex={resultTab === tab ? 0 : -1} onClick={() => setResultTab(tab)} onKeyDown={(event) => { if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) { event.preventDefault(); const next = event.key === "Home" ? "Summary" : event.key === "End" ? "Transcript" : tab === "Summary" ? "Transcript" : "Summary"; setResultTab(next); document.getElementById(`tab-${next.toLowerCase()}`)?.focus(); } }}>{tab === "Summary" ? "AI summary" : "Transcript"}</button>)}</div>
+                <div id="recording-result" role="tabpanel" aria-labelledby={`tab-${resultTab.toLowerCase()}`} tabIndex={0}>
+                  {(resultTab === "Summary" ? upload.summary : upload.transcript) ? <ResultPanel key={`${resultTab}-${upload.id}`} title={resultTab} text={(resultTab === "Summary" ? upload.summary : upload.transcript)!} filename={`${resultTab.toLowerCase()}-${upload.id}.txt`} /> : <p className="result-empty">{resultTab === "Summary" ? "Your summary will appear here when processing is complete." : "Your transcript will appear here once the audio is transcribed."}</p>}
+                </div>
+              </> : <div className="detail-empty"><span className="empty-mark"><AudioMark large /></span><p className="eyebrow">FROM CONVERSATION TO CLARITY</p><h2>A home for your good ideas.</h2><p>Upload a recording or open a saved note.<br />We&apos;ll take care of the words.</p></div>}
+            </section>
+          </div>
+          <footer className="page-footer"><span>Made for the moments worth remembering.</span><span>sonora <span className="footer-dot">·</span> Gnani.ai</span></footer>
+        </main>
       </div>
-    </main>
+    </div>
   );
 }

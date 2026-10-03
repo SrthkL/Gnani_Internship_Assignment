@@ -87,6 +87,7 @@ def test_production_rejects_laptop_llm_and_missing_speech_credentials(monkeypatc
     with pytest.raises(RuntimeError, match="hosted service"):
         start.validate_deployment()
     monkeypatch.setattr(settings, "LLM_BASE_URL", "https://summary.example/v1")
+    monkeypatch.setattr(settings, "AUTH_SECRET", SecretStr(""))
     with pytest.raises(RuntimeError, match="AUTH_SECRET"):
         start.validate_deployment()
     monkeypatch.setattr(settings, "AUTH_SECRET", SecretStr("x" * 32))
